@@ -6,9 +6,11 @@
 
 | 项目 | 标识 |
 | --- | --- |
-| Node 发布版本 | `v0.1.0-yz.1` |
+| Node 发布版本 | `v1.13-yz.1` |
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.1` |
-| Node Release Tag 对应 commit | `a02dbce321cbe921ce04cf692d460f317f528ef5` |
+| Node 上游发布基线 | `v1.13` |
+| Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
+| Node Release Tag 对应 commit | 以 `git rev-parse v1.13-yz.1^{}` 的结果为准 |
 | YZboard 兼容代码 commit | `342ceb5305af5df557fd85264a3157de84d233c5` |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
@@ -20,7 +22,9 @@
 | sing-box `require` 版本 | `v1.13.2` |
 | sing-box 实际 replacement | `github.com/cedar2025/sing-box v1.14.0-alpha.2.0.20260316103356-2e665cb7e295` |
 
-Node 自身版本保持独立，不伪装成 Xray 版本。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
+Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线并增加 `yz.1` fork 修订；Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
+
+先前的 `v0.1.0-yz.1` Tag 保留用于审计，但其版本低于上游 `v1.13`，不作为部署或升级目标，也不创建对应 Release。
 
 ## 兼容约束
 
@@ -36,7 +40,7 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Xray 的上游版本�
 发布构建示例：
 
 ```bash
-VERSION=v0.1.0-yz.1 make build-linux
+VERSION=v1.13-yz.1 make build-linux
 ```
 
 两个二进制的 `-v`/`version` 输出都包含：
@@ -50,11 +54,11 @@ VERSION=v0.1.0-yz.1 make build-linux
 ```bash
 go list -m -json github.com/xtls/xray-core
 go test -v -race -count=1 ./internal/...
-go build -ldflags "-X main.version=v0.1.0-yz.1" ./cmd/xboard-node
-go build -ldflags "-X main.version=v0.1.0-yz.1" ./cmd/xbctl
+go build -ldflags "-X main.version=v1.13-yz.1" ./cmd/xboard-node
+go build -ldflags "-X main.version=v1.13-yz.1" ./cmd/xbctl
 ```
 
-升级器使用 Node Release Tag 下载成对的 `xboard-node` 和 `xbctl`。本次 `v0.1.0-yz.1` Tag 已推送并固定到上表提交；GitHub Release 由 `.github/workflows/ci.yml` 的 `v*` Tag 事件生成，在 Release 记录出现前不能把 Tag 视为已发布资产。回滚时传入上一个 Node Release Tag；Xray fork 的回滚边界由 Node `go.mod` 中记录的 pseudo-version 和对应 fork commit 确定。
+升级器使用 Node Release Tag 下载成对的 `xboard-node` 和 `xbctl`。本次部署版本使用 `v1.13-yz.1`；GitHub Release 由 `.github/workflows/ci.yml` 的 `v*` Tag 事件生成，在 Release 记录出现前不能把 Tag 视为已发布资产。回滚时传入上一个 Node Release Tag；Xray fork 的回滚边界由 Node `go.mod` 中记录的 pseudo-version 和对应 fork commit 确定。
 
 ## 后续上游同步
 

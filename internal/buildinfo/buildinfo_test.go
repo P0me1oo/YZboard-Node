@@ -27,9 +27,9 @@ func TestReleaseMetadataIsPinned(t *testing.T) {
 }
 
 func TestReportContainsForkAndDependencyIdentity(t *testing.T) {
-	report := Report("xboard-node", "v0.1.0-yz.1", "2026-07-25T00:00:00Z", "abc1234")
+	report := Report("xboard-node", "v1.13-yz.1", "2026-07-25T00:00:00Z", "abc1234")
 	for _, want := range []string{
-		"xboard-node v0.1.0-yz.1",
+		"xboard-node v1.13-yz.1",
 		XrayForkVersion,
 		XrayUpstreamCommit,
 		XrayForkCommit,
