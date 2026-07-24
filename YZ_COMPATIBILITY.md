@@ -8,6 +8,8 @@
 | --- | --- |
 | Node 发布版本 | `v0.1.0-yz.1` |
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.1` |
+| Node Release Tag 对应 commit | `a02dbce321cbe921ce04cf692d460f317f528ef5` |
+| YZboard 兼容代码 commit | `342ceb5305af5df557fd85264a3157de84d233c5` |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
 | Xray 上游 Tag commit | `50231eaff98ccc31b5cbd247a721c16e97fe5ec1` |
@@ -52,7 +54,7 @@ go build -ldflags "-X main.version=v0.1.0-yz.1" ./cmd/xboard-node
 go build -ldflags "-X main.version=v0.1.0-yz.1" ./cmd/xbctl
 ```
 
-升级器使用 Node Release Tag 下载成对的 `xboard-node` 和 `xbctl`。回滚时传入上一个 Node Release Tag；Xray fork 的回滚边界由 Node `go.mod` 中记录的 pseudo-version 和对应 fork commit 确定。
+升级器使用 Node Release Tag 下载成对的 `xboard-node` 和 `xbctl`。本次 `v0.1.0-yz.1` Tag 已推送并固定到上表提交；GitHub Release 由 `.github/workflows/ci.yml` 的 `v*` Tag 事件生成，在 Release 记录出现前不能把 Tag 视为已发布资产。回滚时传入上一个 Node Release Tag；Xray fork 的回滚边界由 Node `go.mod` 中记录的 pseudo-version 和对应 fork commit 确定。
 
 ## 后续上游同步
 
