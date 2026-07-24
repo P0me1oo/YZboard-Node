@@ -10,7 +10,7 @@
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.1` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | 以 `git rev-parse v1.13-yz.1^{}` 的结果为准 |
+| Node Release Tag 对应 commit | `6fb176456c305f7aaad47c19f6acd7d1bca66d0b` |
 | YZboard 兼容代码 commit | `342ceb5305af5df557fd85264a3157de84d233c5` |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
