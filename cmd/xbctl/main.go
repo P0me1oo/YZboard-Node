@@ -17,6 +17,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/cedar2025/xboard-node/internal/buildinfo"
 	"github.com/cedar2025/xboard-node/internal/config"
 	"gopkg.in/yaml.v3"
 )
@@ -36,6 +37,7 @@ const (
 var (
 	version   = "dev"
 	buildTime = "unknown"
+	commit    = "unknown"
 )
 
 type instanceRow struct {
@@ -54,7 +56,7 @@ type fileRootConfig struct {
 	WS        *config.WSConfig   `yaml:"ws,omitempty"`
 	Runtime   *fileRuntimeConfig `yaml:"runtime,omitempty"`
 	Cert      *config.CertConfig `yaml:"cert,omitempty"`
-	Instances []fileInstance      `yaml:"instances,omitempty"`
+	Instances []fileInstance     `yaml:"instances,omitempty"`
 }
 
 type fileInstance struct {
@@ -183,7 +185,7 @@ func run(args []string) error {
 	case "uninstall":
 		return runUninstall(args[1:])
 	case "version", "-v", "--version":
-		fmt.Printf("xbctl %s (built %s)\n", version, buildTime)
+		fmt.Println(buildinfo.Report("xbctl", version, buildTime, commit))
 		return nil
 	case "config":
 		return runConfig(args[1:])

@@ -240,6 +240,38 @@ func TestPushStatus_Success(t *testing.T) {
 	}
 }
 
+func TestReportIncludesBatchID(t *testing.T) {
+	var received map[string]interface{}
+	ts, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/server/report" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Errorf("decode report: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	defer ts.Close()
+
+	err := client.Report(
+		"boot-1-1",
+		map[int][2]int64{1: {10, 20}},
+		map[int][]string{1: {"192.0.2.10"}},
+		map[int]int{1: 1},
+		1.5,
+		[2]uint64{100, 50},
+		[2]uint64{0, 0},
+		[2]uint64{1000, 500},
+		map[string]interface{}{"kernel_status": true},
+	)
+	if err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	if got := received["report_id"]; got != "boot-1-1" {
+		t.Fatalf("report_id = %v, want boot-1-1", got)
+	}
+}
+
 func TestResetETags(t *testing.T) {
 	callCount := 0
 	ts, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {

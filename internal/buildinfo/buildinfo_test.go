@@ -1,0 +1,43 @@
+package buildinfo
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestReleaseMetadataIsPinned(t *testing.T) {
+	if XrayUpstreamTag != "v26.7.11" {
+		t.Fatalf("XrayUpstreamTag = %q", XrayUpstreamTag)
+	}
+	if XrayUpstreamCommit != "50231eaff98ccc31b5cbd247a721c16e97fe5ec1" {
+		t.Fatalf("XrayUpstreamCommit = %q", XrayUpstreamCommit)
+	}
+	if XrayForkVersion != "v26.7.11-yz.1" {
+		t.Fatalf("XrayForkVersion = %q", XrayForkVersion)
+	}
+	if XrayForkCommit != "620bee93867095f73880056cdfb08bc54a15f69e" {
+		t.Fatalf("XrayForkCommit = %q", XrayForkCommit)
+	}
+	if SingBoxRequestedVersion != "v1.13.2" {
+		t.Fatalf("SingBoxRequestedVersion = %q", SingBoxRequestedVersion)
+	}
+	if SingBoxResolvedVersion != "v1.14.0-alpha.2.0.20260316103356-2e665cb7e295" {
+		t.Fatalf("SingBoxResolvedVersion = %q", SingBoxResolvedVersion)
+	}
+}
+
+func TestReportContainsForkAndDependencyIdentity(t *testing.T) {
+	report := Report("xboard-node", "v0.1.0-yz.1", "2026-07-25T00:00:00Z", "abc1234")
+	for _, want := range []string{
+		"xboard-node v0.1.0-yz.1",
+		XrayForkVersion,
+		XrayUpstreamCommit,
+		XrayForkCommit,
+		SingBoxRequestedVersion,
+		SingBoxResolvedVersion,
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report %q does not contain %q", report, want)
+		}
+	}
+}

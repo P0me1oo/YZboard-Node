@@ -1,0 +1,64 @@
+# YZboard-Node 兼容矩阵
+
+本文件记录可发布的 Node 构建与内嵌内核之间的固定关系。构建上线时必须使用明确的 Node Release Tag 和固定的 Xray fork commit，不能依赖 `main` 或其他移动分支。
+
+## 当前构建
+
+| 项目 | 标识 |
+| --- | --- |
+| Node 发布版本 | `v0.1.0-yz.1` |
+| Node 适用分支 | `upgrade/xray-v26.7.11-yz.1` |
+| Xray 官方仓库 | `XTLS/Xray-core` |
+| Xray 上游预发布 Tag | `v26.7.11` |
+| Xray 上游 Tag commit | `50231eaff98ccc31b5cbd247a721c16e97fe5ec1` |
+| YZ-Xray-core fork 版本 | `v26.7.11-yz.1` |
+| YZ-Xray-core fork commit | `620bee93867095f73880056cdfb08bc54a15f69e` |
+| Node 中的 Xray replace | `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260724203739-620bee938670` |
+| YZboard 兼容标识 | `xray-v26.7.11-yz.1`（面板版本 `1.0.2`） |
+| sing-box `require` 版本 | `v1.13.2` |
+| sing-box 实际 replacement | `github.com/cedar2025/sing-box v1.14.0-alpha.2.0.20260316103356-2e665cb7e295` |
+
+Node 自身版本保持独立，不伪装成 Xray 版本。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
+
+## 兼容约束
+
+- Hysteria2 用户转换使用 Xray v26.7.11 的 `hysteria/account.MemoryAccount{Auth: ...}`，同时保留 `MemoryUser.Email` 的 `user@<id>` 映射。
+- Xray fork 提供的 Dispatcher、用户级限速、统计计数器和在线 IP/连接状态能力继续由 Node 使用。
+- Node 的流量方向保持 `[upload, download]`，由内核累计计数器交给 tracker 计算增量，再由面板客户端上报。
+- 每次刷出的报告批次带有进程启动标识和递增序号组成的 `report_id`；HTTP 失败时保留完整批次并复用 ID，避免面板重复累计。
+- v26.7.11 已移除未加密 Shadowsocks。历史配置中的 `none`/`plain` 会显式返回错误，不会静默转换成其他加密算法。
+- `go.mod` 的 Xray `require` 版本只用于保持模块路径兼容；实际代码由 `replace` 固定到上表中的 fork pseudo-version。提交前应使用 `go list -m -json github.com/xtls/xray-core` 复核替换路径和版本。
+
+## 构建与版本检查
+
+发布构建示例：
+
+```bash
+VERSION=v0.1.0-yz.1 make build-linux
+```
+
+两个二进制的 `-v`/`version` 输出都包含：
+
+- Node 自身版本、构建时间和提交短 SHA；
+- Xray 上游 Tag/commit、YZ fork 版本/commit，以及实际模块替换版本；
+- sing-box 请求版本和实际 replacement 版本。
+
+发布前至少执行：
+
+```bash
+go list -m -json github.com/xtls/xray-core
+go test -v -race -count=1 ./internal/...
+go build -ldflags "-X main.version=v0.1.0-yz.1" ./cmd/xboard-node
+go build -ldflags "-X main.version=v0.1.0-yz.1" ./cmd/xbctl
+```
+
+升级器使用 Node Release Tag 下载成对的 `xboard-node` 和 `xbctl`。回滚时传入上一个 Node Release Tag；Xray fork 的回滚边界由 Node `go.mod` 中记录的 pseudo-version 和对应 fork commit 确定。
+
+## 后续上游同步
+
+同步新的 Xray 预发布 Tag 时：
+
+1. 先记录官方 Tag 和对应 commit，再合并到 YZ fork；
+2. 解决冲突时保留 Hysteria2 用户识别、统计、Dispatcher 和限速补丁及其测试；
+3. 新上游版本的 fork patch 序列从 `yz.1` 重新开始；
+4. 同步更新本文档、`go.mod/go.sum`、Node Release Tag、构建信息和变更说明。

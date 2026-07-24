@@ -1,0 +1,62 @@
+// Package buildinfo 提供 Node 构建和内嵌内核的可审计版本信息。
+package buildinfo
+
+import (
+	"fmt"
+	"runtime/debug"
+)
+
+const (
+	// Xray 上游和 YZ fork 的发布标识必须指向固定引用，不能使用移动分支。
+	XrayUpstreamTag    = "v26.7.11"
+	XrayUpstreamCommit = "50231eaff98ccc31b5cbd247a721c16e97fe5ec1"
+	XrayForkVersion    = "v26.7.11-yz.1"
+	XrayForkCommit     = "620bee93867095f73880056cdfb08bc54a15f69e"
+
+	// sing-box 的 require 版本和 replace 后实际使用的版本需要同时记录。
+	SingBoxRequestedVersion = "v1.13.2"
+	SingBoxResolvedVersion  = "v1.14.0-alpha.2.0.20260316103356-2e665cb7e295"
+)
+
+// ModuleVersion 返回构建产物中嵌入的模块版本。
+// 对于 replace 模块，同时返回替换路径和版本，便于在版本输出中确认实际 fork 提交。
+func ModuleVersion(path string) string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unavailable"
+	}
+	for _, dep := range info.Deps {
+		if dep.Path != path {
+			continue
+		}
+		if dep.Replace != nil {
+			if dep.Replace.Version == "" {
+				return dep.Replace.Path
+			}
+			return fmt.Sprintf("%s@%s", dep.Replace.Path, dep.Replace.Version)
+		}
+		return fmt.Sprintf("%s@%s", dep.Path, dep.Version)
+	}
+	return "not-linked"
+}
+
+// Report 生成两个命令行程序共用的版本信息输出。
+func Report(binary, version, buildTime, commit string) string {
+	return fmt.Sprintf(
+		"%s %s (built %s, commit %s)\n"+
+			"xray-core: fork %s (upstream %s @ %s; fork commit %s; module %s)\n"+
+			"sing-box: requested %s, resolved %s (module %s)",
+		binary,
+		version,
+		buildTime,
+		commit,
+		XrayForkVersion,
+		XrayUpstreamTag,
+		XrayUpstreamCommit,
+		XrayForkCommit,
+		ModuleVersion("github.com/xtls/xray-core"),
+		SingBoxRequestedVersion,
+		SingBoxResolvedVersion,
+		ModuleVersion("github.com/sagernet/sing-box"),
+	)
+}

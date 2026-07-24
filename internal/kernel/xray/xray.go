@@ -606,7 +606,8 @@ func parseCipherType(cipher string) shadowsocks.CipherType {
 	case "xchacha20-ietf-poly1305", "xchacha20-poly1305":
 		return shadowsocks.CipherType_XCHACHA20_POLY1305
 	case "none", "plain":
-		return shadowsocks.CipherType_NONE
+		// v26.7.11 已移除未加密 Shadowsocks，保留未知值让 AsAccount 显式失败。
+		return shadowsocks.CipherType_UNKNOWN
 	default:
 		return shadowsocks.CipherType_AES_256_GCM
 	}

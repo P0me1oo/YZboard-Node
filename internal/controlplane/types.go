@@ -49,14 +49,17 @@ type Snapshot struct {
 }
 
 type ReportPayload struct {
-	Traffic map[int][2]int64
-	Alive   map[int][]string
-	Online  map[int]int
-	CPU     float64
-	Mem     [2]uint64
-	Swap    [2]uint64
-	Disk    [2]uint64
-	Metrics map[string]interface{}
+	// ReportID 标识一次刷出的报告批次，失败重试时复用同一 ID。
+	// 为空时兼容未提供批次标识的旧调用方。
+	ReportID string
+	Traffic  map[int][2]int64
+	Alive    map[int][]string
+	Online   map[int]int
+	CPU      float64
+	Mem      [2]uint64
+	Swap     [2]uint64
+	Disk     [2]uint64
+	Metrics  map[string]interface{}
 }
 
 type PushClient interface {

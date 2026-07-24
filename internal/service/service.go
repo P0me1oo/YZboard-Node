@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -76,6 +78,13 @@ type Service struct {
 
 	// metricsMu: lastUsers, lastConfig, wsClient, wsDisconnectAt (buildMetrics vs main loop).
 	metricsMu sync.RWMutex
+
+	// reportMu 保护失败的报告批次。HTTP 请求可能已到达面板后才断开连接；
+	// 保留完整批次和 report ID，可让面板丢弃重试而不丢失请求期间产生的新流量。
+	reportMu    sync.Mutex
+	retryReport *reportBatch
+	reportBoot  string
+	reportSeq   atomic.Uint64
 }
 
 // pullResult carries the outcome of an async pullViaAPI back to the main goroutine.
@@ -85,6 +94,11 @@ type pullResult struct {
 	configHash  string
 	userHash    string
 	certChanged bool
+}
+
+type reportBatch struct {
+	id      string
+	payload controlplane.ReportPayload
 }
 
 // apiBackoff implements simple exponential backoff for API failures.
@@ -165,7 +179,17 @@ func newService(cfg *config.Config, cp controlplane.ControlPlane) *Service {
 		wsEvents:     make(chan controlplane.Event, 16),
 		wsStatusCh:   make(chan controlplane.StatusChange, 4),
 		pullResults:  make(chan pullResult, 1),
+		reportBoot:   newReportBootID(),
 	}
+}
+
+func newReportBootID() string {
+	buf := make([]byte, 12)
+	if _, err := cryptorand.Read(buf); err == nil {
+		return hex.EncodeToString(buf)
+	}
+	// 该回退值只用于进程内重试流标识，不是认证值，仅在系统随机源不可用时使用。
+	return fmt.Sprintf("%x", time.Now().UnixNano())
 }
 
 func (s *Service) Run(ctx context.Context) error {
@@ -959,8 +983,7 @@ func (s *Service) trackAndEnforce(ctx context.Context) {
 	}
 }
 
-// pushReportAsync sends the report in a background goroutine so the select
-// loop is never blocked by slow HTTP. Only one push runs at a time.
+// pushReportAsync 在后台发送报告，避免慢 HTTP 阻塞主循环；同一时间只允许一个推送。
 func (s *Service) pushReportAsync() {
 	if !s.sink.SupportsReporting() {
 		return
@@ -975,46 +998,114 @@ func (s *Service) pushReportAsync() {
 		return
 	}
 
-	traffic := s.tracker.FlushTraffic()
-	aliveIPs := s.tracker.FlushAliveIPs()
-	online := s.tracker.CurrentOnline()
-	status := monitor.Collect()
-	metrics := s.buildMetrics(status)
-	metrics["kernel_status"] = s.kernel.IsRunning()
+	batch := s.takeReportBatch()
 
 	go func() {
 		defer s.pushActive.Store(false)
-		if err := s.sink.Report(controlplane.ReportPayload{Traffic: traffic, Alive: aliveIPs, Online: online, CPU: status.CPU, Mem: [2]uint64{status.MemTotal, status.MemUsed}, Swap: [2]uint64{status.SwapTotal, status.SwapUsed}, Disk: [2]uint64{status.DiskTotal, status.DiskUsed}, Metrics: metrics}); err != nil {
+		if err := s.sink.Report(batch.payload); err != nil {
 			nlog.Core().Warn("failed to push report", "error", err)
-			if len(traffic) > 0 {
-				s.tracker.RestoreTraffic(traffic)
-			}
-			if len(aliveIPs) > 0 {
-				s.tracker.RestoreAliveIPs(aliveIPs)
-			}
+			s.rememberFailedReport(batch)
 			s.pushBackoff.onFailure()
 			return
 		}
+		s.forgetCompletedReport(batch)
 		s.pushBackoff.onSuccess()
-		nlog.ReportPushed(len(traffic), len(online))
+		nlog.ReportPushed(len(batch.payload.Traffic), len(batch.payload.Online))
 	}()
 }
 
-// pushReportSync is used only during shutdown to ensure final data is sent.
+// pushReportSync 仅在关闭时使用，确保最后一批数据有机会发送。
 func (s *Service) pushReportSync() {
 	if !s.sink.SupportsReporting() {
 		return
 	}
-	traffic := s.tracker.FlushTraffic()
-	aliveIPs := s.tracker.FlushAliveIPs()
-	online := s.tracker.CurrentOnline()
+	batch := s.takeReportBatch()
+	if err := s.sink.Report(batch.payload); err != nil {
+		nlog.Core().Warn("failed to push final report", "error", err)
+		s.rememberFailedReport(batch)
+		return
+	}
+	s.forgetCompletedReport(batch)
+}
+
+// takeReportBatch 优先返回失败批次。新产生的数据留在 tracker 中，直到旧批次成功，
+// 因而重试不会在同一 ID 下混入已经接受过的新流量。
+func (s *Service) takeReportBatch() *reportBatch {
+	s.reportMu.Lock()
+	if s.retryReport != nil {
+		batch := s.retryReport
+		s.reportMu.Unlock()
+		return batch
+	}
+	s.reportMu.Unlock()
+
+	traffic := cloneTraffic(s.tracker.FlushTraffic())
+	aliveIPs := cloneAliveIPs(s.tracker.FlushAliveIPs())
 	status := monitor.Collect()
 	metrics := s.buildMetrics(status)
 	metrics["kernel_status"] = s.kernel.IsRunning()
+	reportID := s.nextReportID()
 
-	if err := s.sink.Report(controlplane.ReportPayload{Traffic: traffic, Alive: aliveIPs, Online: online, CPU: status.CPU, Mem: [2]uint64{status.MemTotal, status.MemUsed}, Swap: [2]uint64{status.SwapTotal, status.SwapUsed}, Disk: [2]uint64{status.DiskTotal, status.DiskUsed}, Metrics: metrics}); err != nil {
-		nlog.Core().Warn("failed to push final report", "error", err)
+	return &reportBatch{
+		id: reportID,
+		payload: controlplane.ReportPayload{
+			ReportID: reportID,
+			Traffic:  traffic,
+			Alive:    aliveIPs,
+			Online:   s.tracker.CurrentOnline(),
+			CPU:      status.CPU,
+			Mem:      [2]uint64{status.MemTotal, status.MemUsed},
+			Swap:     [2]uint64{status.SwapTotal, status.SwapUsed},
+			Disk:     [2]uint64{status.DiskTotal, status.DiskUsed},
+			Metrics:  metrics,
+		},
 	}
+}
+
+func (s *Service) nextReportID() string {
+	s.reportMu.Lock()
+	defer s.reportMu.Unlock()
+	seq := s.reportSeq.Add(1)
+	if s.reportBoot == "" {
+		s.reportBoot = newReportBootID()
+	}
+	return fmt.Sprintf("%s-%d", s.reportBoot, seq)
+}
+
+func (s *Service) rememberFailedReport(batch *reportBatch) {
+	s.reportMu.Lock()
+	s.retryReport = batch
+	s.reportMu.Unlock()
+}
+
+func (s *Service) forgetCompletedReport(batch *reportBatch) {
+	s.reportMu.Lock()
+	if s.retryReport == batch {
+		s.retryReport = nil
+	}
+	s.reportMu.Unlock()
+}
+
+func cloneTraffic(src map[int][2]int64) map[int][2]int64 {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[int][2]int64, len(src))
+	for uid, value := range src {
+		dst[uid] = value
+	}
+	return dst
+}
+
+func cloneAliveIPs(src map[int][]string) map[int][]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[int][]string, len(src))
+	for uid, ips := range src {
+		dst[uid] = append([]string(nil), ips...)
+	}
+	return dst
 }
 
 // buildMetrics aggregates node-level metrics to be reported to the panel.

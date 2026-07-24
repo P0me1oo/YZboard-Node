@@ -309,6 +309,20 @@ func TestToMemoryUser_Hysteria2(t *testing.T) {
 	}
 }
 
+func TestToMemoryUser_RejectsRemovedShadowsocksNone(t *testing.T) {
+	for _, cipher := range []string{"none", "plain"} {
+		t.Run(cipher, func(t *testing.T) {
+			_, err := toMemoryUser("shadowsocks", &model.NodeSpec{
+				Protocol: "shadowsocks",
+				Cipher:   cipher,
+			}, model.UserSpec{ID: 42, UUID: "legacy-plaintext"})
+			if err == nil {
+				t.Fatalf("toMemoryUser(%q) succeeded; removed plaintext cipher must fail", cipher)
+			}
+		})
+	}
+}
+
 func TestToMemoryUser_ExistingXrayProtocols(t *testing.T) {
 	user := model.UserSpec{
 		ID:   42,
