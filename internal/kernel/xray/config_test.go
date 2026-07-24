@@ -10,6 +10,13 @@ import (
 	"github.com/cedar2025/xboard-node/internal/kernel"
 	"github.com/cedar2025/xboard-node/internal/model"
 	"github.com/cedar2025/xboard-node/internal/panel"
+	xrayprotocol "github.com/xtls/xray-core/common/protocol"
+	hysteriaaccount "github.com/xtls/xray-core/proxy/hysteria/account"
+	"github.com/xtls/xray-core/proxy/shadowsocks"
+	ss2022 "github.com/xtls/xray-core/proxy/shadowsocks_2022"
+	"github.com/xtls/xray-core/proxy/trojan"
+	"github.com/xtls/xray-core/proxy/vless"
+	"github.com/xtls/xray-core/proxy/vmess"
 )
 
 var testKernelCfg = config.KernelConfig{
@@ -256,6 +263,140 @@ func TestBuildConfig_VLESS_Flow(t *testing.T) {
 	ss := ib["streamSettings"].(map[string]interface{})
 	if ss["security"] != "reality" {
 		t.Errorf("expected security reality, got %v", ss["security"])
+	}
+}
+
+func TestBuildConfig_Hysteria2_Users(t *testing.T) {
+	nc := panel.NodeConfig{
+		Protocol:   "hysteria",
+		ServerPort: 24443,
+		Version:    2,
+	}
+	cfg := buildConfig(testKernelCfg, testNodeSpec(&nc), testUsers, kernel.TLSCert{
+		CertPEM: []byte("CERT"),
+		KeyPEM:  []byte("KEY"),
+	})
+
+	inbounds, ok := cfg["inbounds"].([]M)
+	if !ok || len(inbounds) != 1 {
+		t.Fatalf("inbounds = %#v, want one inbound", cfg["inbounds"])
+	}
+	settings, ok := inbounds[0]["settings"].(M)
+	if !ok {
+		t.Fatalf("settings = %#v, want object", inbounds[0]["settings"])
+	}
+	clients, ok := settings["clients"].([]M)
+	if !ok || len(clients) != len(testUsers) {
+		t.Fatalf("clients = %#v, want %d clients", settings["clients"], len(testUsers))
+	}
+	if clients[0]["auth"] != testUsers[0].UUID || clients[0]["email"] != "user@1" {
+		t.Fatalf("first Hysteria client = %#v, want auth and user email", clients[0])
+	}
+}
+
+func TestToMemoryUser_Hysteria2(t *testing.T) {
+	user := model.UserSpec{ID: 42, UUID: "hysteria-auth"}
+	got, err := toMemoryUser("hysteria", &model.NodeSpec{Protocol: "hysteria", Version: 2}, user)
+	if err != nil {
+		t.Fatalf("toMemoryUser() error = %v", err)
+	}
+	account, ok := got.Account.(*hysteriaaccount.MemoryAccount)
+	if !ok {
+		t.Fatalf("account type = %T, want *account.MemoryAccount", got.Account)
+	}
+	if account.Auth != user.UUID || got.Email != "user@42" {
+		t.Fatalf("memory user = %#v, account = %#v", got, account)
+	}
+}
+
+func TestToMemoryUser_ExistingXrayProtocols(t *testing.T) {
+	user := model.UserSpec{
+		ID:   42,
+		UUID: "11111111-1111-1111-1111-111111111111",
+	}
+	tests := []struct {
+		name     string
+		protocol string
+		node     model.NodeSpec
+		check    func(*testing.T, any)
+	}{
+		{
+			name:     "vmess",
+			protocol: "vmess",
+			node:     model.NodeSpec{Protocol: "vmess"},
+			check: func(t *testing.T, account any) {
+				got, ok := account.(*vmess.MemoryAccount)
+				if !ok || got.ID == nil || got.Security != xrayprotocol.SecurityType_AUTO {
+					t.Fatalf("VMess account = %#v", account)
+				}
+			},
+		},
+		{
+			name:     "vless",
+			protocol: "vless",
+			node: model.NodeSpec{
+				Protocol: "vless",
+				Flow:     "xtls-rprx-vision",
+			},
+			check: func(t *testing.T, account any) {
+				got, ok := account.(*vless.MemoryAccount)
+				if !ok || got.ID == nil || got.Flow != "xtls-rprx-vision" || got.Encryption != "none" {
+					t.Fatalf("VLESS account = %#v", account)
+				}
+			},
+		},
+		{
+			name:     "trojan",
+			protocol: "trojan",
+			node:     model.NodeSpec{Protocol: "trojan"},
+			check: func(t *testing.T, account any) {
+				got, ok := account.(*trojan.MemoryAccount)
+				if !ok || got.Password != user.UUID || len(got.Key) != 56 {
+					t.Fatalf("Trojan account = %#v", account)
+				}
+			},
+		},
+		{
+			name:     "shadowsocks-traditional",
+			protocol: "shadowsocks",
+			node: model.NodeSpec{
+				Protocol: "shadowsocks",
+				Cipher:   "aes-128-gcm",
+			},
+			check: func(t *testing.T, account any) {
+				got, ok := account.(*shadowsocks.MemoryAccount)
+				if !ok || got.Password != user.UUID || got.CipherType != shadowsocks.CipherType_AES_128_GCM {
+					t.Fatalf("Shadowsocks account = %#v", account)
+				}
+			},
+		},
+		{
+			name:     "shadowsocks-2022",
+			protocol: "shadowsocks",
+			node: model.NodeSpec{
+				Protocol: "shadowsocks",
+				Cipher:   "2022-blake3-aes-128-gcm",
+			},
+			check: func(t *testing.T, account any) {
+				got, ok := account.(*ss2022.MemoryAccount)
+				if !ok || got.Key != user.UUID {
+					t.Fatalf("Shadowsocks 2022 account = %#v", account)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := toMemoryUser(tc.protocol, &tc.node, user)
+			if err != nil {
+				t.Fatalf("toMemoryUser() error = %v", err)
+			}
+			if got.Email != "user@42" || got.Level != 0 {
+				t.Fatalf("MemoryUser = %#v", got)
+			}
+			tc.check(t, got.Account)
+		})
 	}
 }
 
