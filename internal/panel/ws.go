@@ -1,11 +1,13 @@
 package panel
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net/url"
+	"sort"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -72,11 +74,62 @@ type syncUserDeltaPayload struct {
 	NodeID    int    `json:"node_id"`
 }
 
+type deviceIPList []string
+
+func (l *deviceIPList) UnmarshalJSON(data []byte) error {
+	var list []string
+	if err := json.Unmarshal(data, &list); err == nil {
+		*l = list
+		return nil
+	}
+
+	// PHP encodes arrays with non-contiguous numeric keys as JSON objects.
+	// Accept that legacy shape and restore the original numeric-key order.
+	var keyed map[string]string
+	if err := json.Unmarshal(data, &keyed); err != nil {
+		return fmt.Errorf("decode device IP list: %w", err)
+	}
+	keys := make([]string, 0, len(keyed))
+	for key := range keyed {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		left, leftErr := strconv.Atoi(keys[i])
+		right, rightErr := strconv.Atoi(keys[j])
+		if leftErr == nil && rightErr == nil {
+			return left < right
+		}
+		return keys[i] < keys[j]
+	})
+	list = make([]string, 0, len(keys))
+	for _, key := range keys {
+		list = append(list, keyed[key])
+	}
+	*l = list
+	return nil
+}
+
+type deviceUsers map[int]deviceIPList
+
+func (u *deviceUsers) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("[]")) {
+		*u = deviceUsers{}
+		return nil
+	}
+	var users map[int]deviceIPList
+	if err := json.Unmarshal(data, &users); err != nil {
+		return fmt.Errorf("decode device users: %w", err)
+	}
+	*u = users
+	return nil
+}
+
 // syncDevicesPayload carries global device state from panel.
 type syncDevicesPayload struct {
-	Users     map[int][]string `json:"users"`
-	Timestamp int64            `json:"timestamp"`
-	NodeID    int              `json:"node_id"`
+	Users     deviceUsers `json:"users"`
+	Timestamp int64       `json:"timestamp"`
+	NodeID    int         `json:"node_id"`
 }
 
 // syncNodesPayload carries the updated node list for a machine.
@@ -422,11 +475,14 @@ func (w *WSClient) handleDataEvent(msg wsMessage) {
 	case WSEventSyncDevices:
 		nlog.Core().Debug("ws sync devices event received")
 		var p syncDevicesPayload
-		if err := decodeData(msg.Data, &p); err != nil {
+		if err := json.Unmarshal(msg.Data, &p); err != nil {
 			nlog.Core().Warn("ws: cannot decode devices payload", "error", err)
 			return
 		}
-		event.DeviceUsers = p.Users
+		event.DeviceUsers = make(map[int][]string, len(p.Users))
+		for userID, ips := range p.Users {
+			event.DeviceUsers[userID] = []string(ips)
+		}
 		event.NodeID = p.NodeID
 
 	case WSEventSyncNodes:

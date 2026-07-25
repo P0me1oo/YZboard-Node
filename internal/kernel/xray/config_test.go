@@ -1,6 +1,7 @@
 package xray
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -11,6 +12,7 @@ import (
 	"github.com/cedar2025/xboard-node/internal/model"
 	"github.com/cedar2025/xboard-node/internal/panel"
 	xrayprotocol "github.com/xtls/xray-core/common/protocol"
+	"github.com/xtls/xray-core/infra/conf/serial"
 	hysteriaaccount "github.com/xtls/xray-core/proxy/hysteria/account"
 	"github.com/xtls/xray-core/proxy/shadowsocks"
 	ss2022 "github.com/xtls/xray-core/proxy/shadowsocks_2022"
@@ -285,12 +287,23 @@ func TestBuildConfig_Hysteria2_Users(t *testing.T) {
 	if !ok {
 		t.Fatalf("settings = %#v, want object", inbounds[0]["settings"])
 	}
+	if settings["version"] != 2 {
+		t.Fatalf("settings.version = %#v, want 2", settings["version"])
+	}
 	clients, ok := settings["clients"].([]M)
 	if !ok || len(clients) != len(testUsers) {
 		t.Fatalf("clients = %#v, want %d clients", settings["clients"], len(testUsers))
 	}
 	if clients[0]["auth"] != testUsers[0].UUID || clients[0]["email"] != "user@1" {
 		t.Fatalf("first Hysteria client = %#v, want auth and user email", clients[0])
+	}
+
+	data, err := marshalConfig(testKernelCfg, testNodeSpec(&nc), testUsers, kernel.TLSCert{})
+	if err != nil {
+		t.Fatalf("marshalConfig() error = %v", err)
+	}
+	if _, err := serial.LoadJSONConfig(bytes.NewReader(data)); err != nil {
+		t.Fatalf("Xray rejected generated Hysteria2 config: %v", err)
 	}
 }
 

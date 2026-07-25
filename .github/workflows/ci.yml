@@ -116,9 +116,11 @@ jobs:
         with:
           merge-multiple: true
           path: dist
+      - name: Add installer to release
+        run: install -m 0755 install.sh dist/install.sh
       - name: Generate checksums
         working-directory: dist
-        run: sha256sum xboard-node-linux-amd64 xboard-node-linux-arm64 xbctl-linux-amd64 xbctl-linux-arm64 > SHA256SUMS
+        run: sha256sum xboard-node-linux-amd64 xboard-node-linux-arm64 xbctl-linux-amd64 xbctl-linux-arm64 install.sh > SHA256SUMS
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
@@ -129,4 +131,5 @@ jobs:
             dist/xboard-node-linux-arm64
             dist/xbctl-linux-amd64
             dist/xbctl-linux-arm64
+            dist/install.sh
             dist/SHA256SUMS

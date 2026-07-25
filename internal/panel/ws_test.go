@@ -289,3 +289,57 @@ func TestWSClient_UserDeltaEvent(t *testing.T) {
 		t.Errorf("unexpected DeltaUsers: %+v", received[0].DeltaUsers)
 	}
 }
+
+func TestWSClient_SyncDevicesAcceptsArrayAndNumericKeyObject(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want []string
+	}{
+		{
+			name: "array",
+			data: `{"users":{"15":["192.0.2.1","2001:db8::1"]},"node_id":121}`,
+			want: []string{"192.0.2.1", "2001:db8::1"},
+		},
+		{
+			name: "numeric key object",
+			data: `{"users":{"15":{"2":"2001:db8::1","0":"192.0.2.1"}},"node_id":121}`,
+			want: []string{"192.0.2.1", "2001:db8::1"},
+		},
+		{
+			name: "empty PHP array",
+			data: `{"users":[],"node_id":121}`,
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var received *WSEvent
+			client := &WSClient{onEvent: func(event WSEvent) {
+				received = &event
+			}}
+
+			client.handleDataEvent(wsMessage{
+				Event: WSEventSyncDevices,
+				Data:  json.RawMessage(tt.data),
+			})
+
+			if received == nil {
+				t.Fatal("sync.devices event was not delivered")
+			}
+			if received.NodeID != 121 {
+				t.Fatalf("NodeID = %d, want 121", received.NodeID)
+			}
+			got := received.DeviceUsers[15]
+			if len(got) != len(tt.want) {
+				t.Fatalf("DeviceUsers[15] = %#v, want %#v", got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Fatalf("DeviceUsers[15] = %#v, want %#v", got, tt.want)
+				}
+			}
+		})
+	}
+}

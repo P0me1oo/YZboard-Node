@@ -85,7 +85,17 @@ type Service struct {
 	retryReport *reportBatch
 	reportBoot  string
 	reportSeq   atomic.Uint64
+	status      func(RuntimeStatus)
 }
+
+type RuntimeStatus string
+
+const (
+	RuntimeStarting RuntimeStatus = "starting"
+	RuntimeRunning  RuntimeStatus = "running"
+	RuntimeFailed   RuntimeStatus = "failed"
+	RuntimeStopped  RuntimeStatus = "stopped"
+)
 
 // pullResult carries the outcome of an async pullViaAPI back to the main goroutine.
 type pullResult struct {
@@ -150,6 +160,17 @@ func NewWithControlPlane(cfg *config.Config, cp controlplane.ControlPlane) *Serv
 	return newService(cfg, cp)
 }
 
+// SetStatusHandler registers a lifecycle observer before Run is called.
+func (s *Service) SetStatusHandler(handler func(RuntimeStatus)) {
+	s.status = handler
+}
+
+func (s *Service) notifyStatus(status RuntimeStatus) {
+	if s.status != nil {
+		s.status(status)
+	}
+}
+
 func newService(cfg *config.Config, cp controlplane.ControlPlane) *Service {
 	certMgr := cert.NewManager(cfg.Cert)
 
@@ -192,7 +213,16 @@ func newReportBootID() string {
 	return fmt.Sprintf("%x", time.Now().UnixNano())
 }
 
-func (s *Service) Run(ctx context.Context) error {
+func (s *Service) Run(ctx context.Context) (runErr error) {
+	s.notifyStatus(RuntimeStarting)
+	defer func() {
+		if runErr != nil {
+			s.notifyStatus(RuntimeFailed)
+			return
+		}
+		s.notifyStatus(RuntimeStopped)
+	}()
+
 	// Start cert manager (handles auto-TLS or manual cert verification)
 	if err := s.cert.Start(ctx); err != nil {
 		return fmt.Errorf("cert manager: %w", err)
@@ -225,6 +255,7 @@ func (s *Service) Run(ctx context.Context) error {
 	defer wsDiscoveryTicker.Stop()
 
 	s.startWSClient(ctx)
+	s.notifyStatus(RuntimeRunning)
 
 	for {
 		select {

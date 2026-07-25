@@ -53,6 +53,10 @@ type Orchestrator struct {
 
 	pullInterval time.Duration
 	pushInterval time.Duration
+
+	statusMu      sync.Mutex
+	nodeStatuses  map[int]service.RuntimeStatus
+	statusHandler func(service.RuntimeStatus)
 }
 
 // New creates a machine orchestrator from the given config.
@@ -63,25 +67,91 @@ func New(cfg *config.Config) *Orchestrator {
 		MachineID: cfg.Machine.MachineID,
 	}
 	return &Orchestrator{
-		cfg:       cfg,
-		client:    panel.NewClient(panelCfg),
-		nodes:     make(map[int]*nodeHandle),
-		mailboxes: make(map[int]*controlplane.NodeMailbox),
-		statuses:  make(map[int]chan<- controlplane.StatusChange),
+		cfg:          cfg,
+		client:       panel.NewClient(panelCfg),
+		nodes:        make(map[int]*nodeHandle),
+		mailboxes:    make(map[int]*controlplane.NodeMailbox),
+		statuses:     make(map[int]chan<- controlplane.StatusChange),
+		nodeStatuses: make(map[int]service.RuntimeStatus),
 	}
+}
+
+// SetStatusHandler reports the aggregate state of all managed nodes.
+func (o *Orchestrator) SetStatusHandler(handler func(service.RuntimeStatus)) {
+	o.statusHandler = handler
+}
+
+func (o *Orchestrator) notifyStatus(status service.RuntimeStatus) {
+	if o.statusHandler != nil {
+		o.statusHandler(status)
+	}
+}
+
+func (o *Orchestrator) setNodeStatus(nodeID int, status service.RuntimeStatus) {
+	o.statusMu.Lock()
+	o.nodeStatuses[nodeID] = status
+	aggregate := o.aggregateNodeStatusLocked()
+	o.statusMu.Unlock()
+	o.notifyStatus(aggregate)
+}
+
+func (o *Orchestrator) removeNodeStatus(nodeID int) {
+	o.statusMu.Lock()
+	delete(o.nodeStatuses, nodeID)
+	aggregate := o.aggregateNodeStatusLocked()
+	o.statusMu.Unlock()
+	o.notifyStatus(aggregate)
+}
+
+func (o *Orchestrator) reconcileNodeStatuses(wanted map[int]panel.MachineNode) {
+	o.statusMu.Lock()
+	for nodeID := range o.nodeStatuses {
+		if _, ok := wanted[nodeID]; !ok {
+			delete(o.nodeStatuses, nodeID)
+		}
+	}
+	for nodeID := range wanted {
+		if _, ok := o.nodeStatuses[nodeID]; !ok {
+			o.nodeStatuses[nodeID] = service.RuntimeStarting
+		}
+	}
+	aggregate := o.aggregateNodeStatusLocked()
+	o.statusMu.Unlock()
+	o.notifyStatus(aggregate)
+}
+
+func (o *Orchestrator) aggregateNodeStatusLocked() service.RuntimeStatus {
+	aggregate := service.RuntimeRunning
+	for _, nodeStatus := range o.nodeStatuses {
+		if nodeStatus == service.RuntimeFailed {
+			return service.RuntimeFailed
+		}
+		if nodeStatus == service.RuntimeStarting || nodeStatus == service.RuntimeStopped {
+			aggregate = service.RuntimeStarting
+		}
+	}
+	return aggregate
 }
 
 // Run is the main loop. It blocks until ctx is cancelled.
 func (o *Orchestrator) Run(ctx context.Context) error {
+	o.notifyStatus(service.RuntimeStarting)
 	o.runCtx = ctx
 	nodesResp, err := o.client.GetMachineNodes()
 	if err != nil {
+		o.notifyStatus(service.RuntimeFailed)
 		return fmt.Errorf("initial node discovery: %w", err)
 	}
 
 	o.applyIntervals(nodesResp.BaseConfig)
 	nlog.Core().Info(fmt.Sprintf("machine %d: discovered %d nodes",
 		o.cfg.Machine.MachineID, len(nodesResp.Nodes)))
+
+	wanted := make(map[int]panel.MachineNode, len(nodesResp.Nodes))
+	for _, node := range nodesResp.Nodes {
+		wanted[node.ID] = node
+	}
+	o.reconcileNodeStatuses(wanted)
 
 	// Start machine-level WS as early as possible so sync.nodes can reach an
 	// empty machine before the first node is attached.
@@ -91,7 +161,6 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	for _, n := range nodesResp.Nodes {
 		o.startNode(ctx, n)
 	}
-
 	discoveryTicker := time.NewTicker(o.pullInterval)
 	statusTicker := time.NewTicker(o.pushInterval)
 	defer discoveryTicker.Stop()
@@ -101,6 +170,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			o.stopAll()
+			o.notifyStatus(service.RuntimeStopped)
 			return nil
 
 		case <-discoveryTicker.C:
@@ -130,6 +200,7 @@ func (o *Orchestrator) startNode(ctx context.Context, mn panel.MachineNode) {
 	o.eventsMu.Lock()
 	o.mailboxes[mn.ID] = mb
 	o.eventsMu.Unlock()
+	o.setNodeStatus(mn.ID, service.RuntimeStarting)
 
 	nodeCfg := o.cfg.ExpandMachineNode(mn.ID, mn.Type)
 
@@ -166,18 +237,34 @@ func (o *Orchestrator) startNode(ctx context.Context, mn panel.MachineNode) {
 
 	cp := controlplane.NewMachinePanelControlPlane(perNodeClient, nodeCfg.Kernel, push, registerFn)
 	svc := service.NewWithControlPlane(nodeCfg, cp)
+	svc.SetStatusHandler(func(status service.RuntimeStatus) {
+		o.setNodeStatus(mn.ID, status)
+	})
 
 	nlog.Core().Info(fmt.Sprintf("machine: starting node %d (%s/%s)",
 		mn.ID, mn.Type, mn.Name))
 
 	go func() {
 		defer close(done)
-		defer o.unregisterNode(mn.ID)
-		if err := svc.Run(nodeCtx); err != nil {
+		err := svc.Run(nodeCtx)
+		if err != nil {
 			nlog.Core().Error("machine node exited with error",
 				"node_id", mn.ID, "error", err)
 		}
+		o.unregisterNode(mn.ID)
+		o.finishNode(mn.ID, done, err)
 	}()
+}
+
+func (o *Orchestrator) finishNode(nodeID int, done chan struct{}, runErr error) {
+	o.mu.Lock()
+	if current, ok := o.nodes[nodeID]; ok && current.done == done {
+		delete(o.nodes, nodeID)
+	}
+	o.mu.Unlock()
+	if runErr != nil {
+		o.setNodeStatus(nodeID, service.RuntimeFailed)
+	}
 }
 
 func (o *Orchestrator) stopNode(nodeID int) {
@@ -187,7 +274,6 @@ func (o *Orchestrator) stopNode(nodeID int) {
 		o.mu.Unlock()
 		return
 	}
-	delete(o.nodes, nodeID)
 	o.mu.Unlock()
 
 	o.eventsMu.Lock()
@@ -197,6 +283,12 @@ func (o *Orchestrator) stopNode(nodeID int) {
 	nlog.Core().Info(fmt.Sprintf("machine: stopping node %d", nodeID))
 	h.cancel()
 	<-h.done
+	o.mu.Lock()
+	if current, ok := o.nodes[nodeID]; ok && current == h {
+		delete(o.nodes, nodeID)
+	}
+	o.mu.Unlock()
+	o.removeNodeStatus(nodeID)
 }
 
 func (o *Orchestrator) stopAll() {
@@ -246,6 +338,7 @@ func (o *Orchestrator) rediscover(ctx context.Context) {
 	for _, id := range toRemove {
 		o.stopNode(id)
 	}
+	o.reconcileNodeStatuses(wanted)
 
 	for _, n := range nodesResp.Nodes {
 		o.startNode(ctx, n) // no-op if already running
