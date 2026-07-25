@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,7 +32,7 @@ const (
 	serviceName            = "xboard-node.service"
 	serviceFilePath        = "/etc/systemd/system/xboard-node.service"
 	defaultInstallRoot     = "/etc/xboard-node"
-	downloadBase           = "https://github.com/cedar2025/xboard-node/releases"
+	downloadBase           = "https://github.com/P0me1oo/YZboard-Node/releases"
 )
 
 var (
@@ -410,6 +411,18 @@ func runUpgrade(args []string) error {
 
 	binaryURL := resolveDownloadURL(fmt.Sprintf("xboard-node-linux-%s", arch), version)
 	cliURL := resolveDownloadURL(fmt.Sprintf("xbctl-linux-%s", arch), version)
+	checksumsURL := resolveDownloadURL("SHA256SUMS", version)
+	checksumsPath := filepath.Join(binaryDir, ".xboard-node.SHA256SUMS.new")
+	defer os.Remove(checksumsPath)
+
+	fmt.Printf("Downloading %s...\n", checksumsURL)
+	if err := downloadFile(checksumsURL, checksumsPath); err != nil {
+		return fmt.Errorf("download release checksums: %w", err)
+	}
+	checksums, err := os.ReadFile(checksumsPath)
+	if err != nil {
+		return fmt.Errorf("read release checksums: %w", err)
+	}
 
 	fmt.Printf("Downloading %s...\n", binaryURL)
 	if err := downloadFile(binaryURL, newBinary); err != nil {
@@ -420,6 +433,12 @@ func runUpgrade(args []string) error {
 	if err := downloadFile(cliURL, newCLI); err != nil {
 		os.Remove(newBinary)
 		return fmt.Errorf("download xbctl: %w", err)
+	}
+	if err := verifyReleaseChecksum(newBinary, fmt.Sprintf("xboard-node-linux-%s", arch), checksums); err != nil {
+		return cleanupFiles(newBinary, newCLI, err)
+	}
+	if err := verifyReleaseChecksum(newCLI, fmt.Sprintf("xbctl-linux-%s", arch), checksums); err != nil {
+		return cleanupFiles(newBinary, newCLI, err)
 	}
 
 	if err := os.Chmod(newBinary, 0o755); err != nil {
@@ -501,9 +520,9 @@ func runUpgrade(args []string) error {
 	os.Remove(backupCLI)
 
 	// Update install-meta.json
-	newVer := "unknown"
+	newVer := version
 	if out, err := exec.Command(defaultBinaryPath, "-v").CombinedOutput(); err == nil {
-		newVer = strings.TrimSpace(string(out))
+		newVer = installedVersion(version, out)
 	}
 	if root, err := loadWritableRootConfig(defaultConfigPath); err == nil {
 		instances, _ := root.NormalizeInstances()
@@ -618,6 +637,50 @@ func downloadFile(url, dest string) error {
 	defer f.Close()
 	_, err = io.Copy(f, resp.Body)
 	return err
+}
+
+func verifyReleaseChecksum(path, artifact string, checksums []byte) error {
+	var expected string
+	for _, line := range strings.Split(string(checksums), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.TrimPrefix(fields[1], "*")
+		if name == artifact {
+			expected = fields[0]
+			break
+		}
+	}
+	if len(expected) != 64 {
+		return fmt.Errorf("checksum for %s is missing or invalid", artifact)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %s for checksum: %w", artifact, err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("checksum %s: %w", artifact, err)
+	}
+	actual := fmt.Sprintf("%x", h.Sum(nil))
+	if !strings.EqualFold(actual, expected) {
+		return fmt.Errorf("checksum mismatch for %s", artifact)
+	}
+	return nil
+}
+
+func installedVersion(requested string, report []byte) string {
+	if requested != "" && requested != "latest" {
+		return requested
+	}
+	fields := strings.Fields(string(report))
+	if len(fields) >= 2 {
+		return fields[1]
+	}
+	return "unknown"
 }
 
 func cleanupFiles(a, b string, err error) error {
@@ -1159,7 +1222,7 @@ func latestInstanceID(instances []*config.Config) string {
 func regenerateServiceFile() error {
 	unit := fmt.Sprintf(`[Unit]
 Description=Xboard Node Backend
-Documentation=https://github.com/cedar2025/xboard-node
+Documentation=https://github.com/P0me1oo/YZboard-Node
 After=network-online.target
 Wants=network-online.target
 
@@ -1193,16 +1256,52 @@ func machineIDPtr(cfg *config.Config) *int {
 
 func runConfig(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: xbctl config <init|health-port>")
+		return errors.New("usage: xbctl config <init|health-port|refresh-meta>")
 	}
 	switch args[0] {
 	case "init":
 		return runConfigInit(args[1:])
 	case "health-port":
 		return runConfigHealthPort(args[1:])
+	case "refresh-meta":
+		return runConfigRefreshMeta(args[1:])
 	default:
 		return fmt.Errorf("unknown config command: %s", args[0])
 	}
+}
+
+func runConfigRefreshMeta(args []string) error {
+	configPath := defaultConfigPath
+	metaPath := defaultMetaPath
+	releaseVersion := ""
+	for i := 0; i < len(args); i++ {
+		if i+1 >= len(args) {
+			break
+		}
+		switch args[i] {
+		case "--config":
+			i++
+			configPath = args[i]
+		case "--meta":
+			i++
+			metaPath = args[i]
+		case "--version":
+			i++
+			releaseVersion = args[i]
+		}
+	}
+	if strings.TrimSpace(releaseVersion) == "" {
+		return errors.New("--version is required")
+	}
+	root, err := loadWritableRootConfig(configPath)
+	if err != nil {
+		return err
+	}
+	instances, err := root.NormalizeInstances()
+	if err != nil {
+		return err
+	}
+	return writeInstallMetaVersioned(metaPath, root, releaseVersion, latestInstanceID(instances))
 }
 
 // runConfigInit generates/merges an instance into config.yml, writes

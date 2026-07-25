@@ -27,7 +27,7 @@ DEFAULT_ACTION="install"
 DEFAULT_RELEASE_VERSION="latest"
 DEFAULT_LOG_LEVEL="info"
 DEFAULT_KERNEL_LOG_LEVEL="warn"
-DEFAULT_DOWNLOAD_BASE="https://github.com/cedar2025/xboard-node/releases"
+DEFAULT_DOWNLOAD_BASE="https://github.com/P0me1oo/YZboard-Node/releases"
 
 ACTION="${DEFAULT_ACTION}"
 MODE=""
@@ -379,13 +379,13 @@ install_dependencies() {
     case "$OS" in
         ubuntu|debian)
             DEBIAN_FRONTEND=noninteractive run_with_retry 10 3 apt-get update -qq
-            DEBIAN_FRONTEND=noninteractive run_with_retry 10 3 apt-get install -y -qq curl wget ca-certificates >/dev/null 2>&1
+            DEBIAN_FRONTEND=noninteractive run_with_retry 10 3 apt-get install -y -qq curl wget ca-certificates coreutils >/dev/null 2>&1
             ;;
         centos|rhel|rocky|almalinux|fedora)
             if command -v dnf >/dev/null 2>&1; then
-                run_with_retry 5 3 dnf install -y -q curl wget ca-certificates >/dev/null 2>&1
+                run_with_retry 5 3 dnf install -y -q curl wget ca-certificates coreutils >/dev/null 2>&1
             else
-                run_with_retry 5 3 yum install -y -q curl wget ca-certificates >/dev/null 2>&1
+                run_with_retry 5 3 yum install -y -q curl wget ca-certificates coreutils >/dev/null 2>&1
             fi
             ;;
         *)
@@ -489,6 +489,34 @@ resolve_download_url() {
     fi
 }
 
+verify_release_checksum() {
+    local file="$1"
+    local artifact="$2"
+    local checksums="$TMP_DIR/SHA256SUMS"
+    if [ ! -f "$checksums" ]; then
+        resolve_download_url "SHA256SUMS"
+        log_step "Downloading release checksums: ${DOWNLOAD_URL}"
+        if ! curl -fsSL "$DOWNLOAD_URL" -o "$checksums"; then
+            log_error "Failed to download release checksums from ${DOWNLOAD_URL}"
+            exit 1
+        fi
+    fi
+
+    local expected
+    local actual
+    expected=$(awk -v name="$artifact" '$2 == name || $2 == "*" name { print $1; exit }' "$checksums")
+    if [ -z "$expected" ]; then
+        log_error "No checksum found for ${artifact}"
+        exit 1
+    fi
+    actual=$(sha256sum "$file" | awk '{ print $1 }')
+    if [ "$actual" != "$expected" ]; then
+        log_error "Checksum mismatch for ${artifact}"
+        exit 1
+    fi
+    log_info "Checksum verified: ${artifact}"
+}
+
 stage_binary() {
     local staged="$TMP_DIR/xboard-node"
     local local_src
@@ -497,12 +525,14 @@ stage_binary() {
         log_step "Using local binary: ${local_src}"
         cp "$local_src" "$staged"
     else
-        resolve_download_url "xboard-node-linux-${ARCH}"
+        local artifact="xboard-node-linux-${ARCH}"
+        resolve_download_url "$artifact"
         log_step "Downloading binary: ${DOWNLOAD_URL}"
         if ! curl -fsSL "$DOWNLOAD_URL" -o "$staged"; then
             log_error "Failed to download binary from ${DOWNLOAD_URL}"
             exit 1
         fi
+        verify_release_checksum "$staged" "$artifact"
     fi
     chmod +x "$staged"
     if ! "$staged" -v >/dev/null 2>&1; then
@@ -529,12 +559,14 @@ stage_xbctl() {
         log_step "Using local xbctl binary: ${local_src}"
         cp "$local_src" "$staged"
     else
-        resolve_download_url "xbctl-linux-${ARCH}"
+        local artifact="xbctl-linux-${ARCH}"
+        resolve_download_url "$artifact"
         log_step "Downloading xbctl: ${DOWNLOAD_URL}"
         if ! curl -fsSL "$DOWNLOAD_URL" -o "$staged"; then
             log_error "Failed to download xbctl from ${DOWNLOAD_URL}"
             exit 1
         fi
+        verify_release_checksum "$staged" "$artifact"
     fi
     chmod +x "$staged"
     if ! "$staged" version > /dev/null 2>&1; then
@@ -592,7 +624,7 @@ render_service() {
     cat >"$TMP_DIR/${SERVICE_NAME}" <<EOF_UNIT
 [Unit]
 Description=Xboard Node Backend
-Documentation=https://github.com/cedar2025/xboard-node
+Documentation=https://github.com/P0me1oo/YZboard-Node
 After=network-online.target
 Wants=network-online.target
 
@@ -733,6 +765,7 @@ perform_upgrade() {
         perform_install
         return
     fi
+    load_health_port_from_config "$CONFIG_FILE"
     TMP_DIR=$(mktemp -d)
     ensure_dirs
     stage_binary
@@ -750,6 +783,10 @@ perform_upgrade() {
         show_recent_logs
         return 1
     fi
+    "$CLI_PATH" config refresh-meta \
+        --config "$CONFIG_FILE" \
+        --meta "$INSTALL_META" \
+        --version "$RELEASE_VERSION"
     log_info "Upgrade succeeded"
 }
 

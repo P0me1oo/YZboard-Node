@@ -6,23 +6,23 @@
 
 | 项目 | 标识 |
 | --- | --- |
-| Node 发布版本 | `v1.13-yz.1` |
+| Node 发布版本 | `v1.13-yz.2` |
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.1` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | `6fb176456c305f7aaad47c19f6acd7d1bca66d0b` |
-| YZboard 兼容代码 commit | `342ceb5305af5df557fd85264a3157de84d233c5` |
+| Node Release Tag 对应 commit | 由固定 Tag `v1.13-yz.2^{}` 解析；发布后在分支文档和 Release 记录中补充完整 SHA |
+| YZboard 兼容代码 commit | 面板 `1.0.3` 安装链提交；发布后在分支文档中补充完整 SHA |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
 | Xray 上游 Tag commit | `50231eaff98ccc31b5cbd247a721c16e97fe5ec1` |
 | YZ-Xray-core fork 版本 | `v26.7.11-yz.1` |
 | YZ-Xray-core fork commit | `620bee93867095f73880056cdfb08bc54a15f69e` |
 | Node 中的 Xray replace | `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260724203739-620bee938670` |
-| YZboard 兼容标识 | `xray-v26.7.11-yz.1`（面板版本 `1.0.2`） |
+| YZboard 兼容标识 | `xray-v26.7.11-yz.1`（面板版本 `1.0.3`） |
 | sing-box `require` 版本 | `v1.13.2` |
 | sing-box 实际 replacement | `github.com/cedar2025/sing-box v1.14.0-alpha.2.0.20260316103356-2e665cb7e295` |
 
-Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线并增加 `yz.1` fork 修订；Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
+Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.2` 在 `yz.1` 的协议兼容基础上修正 fork 安装、升级和发布来源。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
 
 先前的 `v0.1.0-yz.1` Tag 保留用于审计，但其版本低于上游 `v1.13`，不作为部署或升级目标，也不创建对应 Release。
 
@@ -40,7 +40,7 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 发布构建示例：
 
 ```bash
-VERSION=v1.13-yz.1 make build-linux
+VERSION=v1.13-yz.2 make build-linux
 ```
 
 两个二进制的 `-v`/`version` 输出都包含：
@@ -54,11 +54,11 @@ VERSION=v1.13-yz.1 make build-linux
 ```bash
 go list -m -json github.com/xtls/xray-core
 go test -v -race -count=1 ./internal/...
-go build -ldflags "-X main.version=v1.13-yz.1" ./cmd/xboard-node
-go build -ldflags "-X main.version=v1.13-yz.1" ./cmd/xbctl
+go build -ldflags "-X main.version=v1.13-yz.2" ./cmd/xboard-node
+go build -ldflags "-X main.version=v1.13-yz.2" ./cmd/xbctl
 ```
 
-升级器使用 Node Release Tag 下载成对的 `xboard-node` 和 `xbctl`。本次部署版本使用 `v1.13-yz.1`；GitHub Release 由 `.github/workflows/ci.yml` 的 `v*` Tag 事件生成，在 Release 记录出现前不能把 Tag 视为已发布资产。回滚时传入上一个 Node Release Tag；Xray fork 的回滚边界由 Node `go.mod` 中记录的 pseudo-version 和对应 fork commit 确定。
+安装器和升级器使用 Node Release Tag 下载成对的 `xboard-node` 和 `xbctl`，并使用同一 Release 的 `SHA256SUMS` 校验。本次部署版本使用 `v1.13-yz.2`；GitHub Release 由 `.github/workflows/ci.yml` 的 `v*` Tag 事件生成，在 Release 记录和五个资产出现前不能把 Tag 视为已发布。回滚时传入上一个可用的 Node Release Tag；Xray fork 的回滚边界由 Node `go.mod` 中记录的 pseudo-version 和对应 fork commit 确定。
 
 ## 后续上游同步
 
