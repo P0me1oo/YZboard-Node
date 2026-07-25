@@ -11,6 +11,7 @@
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
 | Node Release Tag 对应 commit | `28161f734f034f4385971aeeade1a523732a9d8d` |
+| Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
 | YZboard 兼容代码 commit | `fc66b802a2d57791a65fc57051e7be8d6d26a579` |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
