@@ -10,8 +10,8 @@
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.1` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | 由固定 Tag `v1.13-yz.2^{}` 解析；发布后在分支文档和 Release 记录中补充完整 SHA |
-| YZboard 兼容代码 commit | 面板 `1.0.3` 安装链提交；发布后在分支文档中补充完整 SHA |
+| Node Release Tag 对应 commit | `28161f734f034f4385971aeeade1a523732a9d8d` |
+| YZboard 兼容代码 commit | `fc66b802a2d57791a65fc57051e7be8d6d26a579` |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
 | Xray 上游 Tag commit | `50231eaff98ccc31b5cbd247a721c16e97fe5ec1` |
@@ -48,6 +48,15 @@ VERSION=v1.13-yz.2 make build-linux
 - Node 自身版本、构建时间和提交短 SHA；
 - Xray 上游 Tag/commit、YZ fork 版本/commit，以及实际模块替换版本；
 - sing-box 请求版本和实际 replacement 版本。
+
+`v1.13-yz.2` Release 资产校验值：
+
+| 资产 | SHA-256 |
+| --- | --- |
+| `xboard-node-linux-amd64` | `26ceefd8d190abf46eae64c254fb7a8cda5737f46cabe2980b53c62812aed7ca` |
+| `xboard-node-linux-arm64` | `9f4b9b5e5178f36c9708f35399e53857a69a1f2a5908d4184775cbd56a306c88` |
+| `xbctl-linux-amd64` | `13b477631bae112134588a184422cb91345bda168fee97987c44a542ece2298f` |
+| `xbctl-linux-arm64` | `e0c5eb94288a3d2c4d813fa1bc227d76000e20dae74aac6c6324c0b9ce44f19a` |
 
 发布前至少执行：
 
