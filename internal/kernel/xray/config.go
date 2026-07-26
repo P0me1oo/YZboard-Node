@@ -96,17 +96,54 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 // into an Xray outbound object. Xray uses a nested layout where protocol-
 // specific fields go inside a "settings" key, and chain proxying uses "proxySettings".
 func outboundConfigToXray(oc model.OutboundConfig) M {
+	protocol := oc.Protocol
+	switch {
+	case model.IsDirectOutbound(protocol):
+		protocol = "freedom"
+	case model.IsBlockOutbound(protocol):
+		protocol = "blackhole"
+	}
+
 	m := M{
-		"protocol": oc.Protocol,
+		"protocol": protocol,
 		"tag":      oc.Tag,
 	}
-	if len(oc.Settings) > 0 {
-		m["settings"] = oc.Settings
+
+	// sendThrough 绑定出站源地址，在 xray 里是 outbound 顶层字段而不是 settings 的一项，
+	// 因此从 settings 里提升上来；settings 是共享数据，提升时复制一份再删。
+	settings := oc.Settings
+	for _, key := range model.SendThroughKeys {
+		value, ok := settings[key]
+		if !ok {
+			continue
+		}
+		if text, isText := value.(string); !isText || strings.TrimSpace(text) == "" {
+			continue
+		}
+		m["sendThrough"] = value
+		settings = cloneWithout(settings, model.SendThroughKeys)
+		break
+	}
+
+	if len(settings) > 0 {
+		m["settings"] = settings
 	}
 	if oc.ProxyTag != "" {
 		m["proxySettings"] = M{"tag": oc.ProxyTag}
 	}
 	return m
+}
+
+// cloneWithout 复制 settings 并去掉指定键，避免改动调用方持有的 map。
+func cloneWithout(settings map[string]any, drop []string) map[string]any {
+	out := make(map[string]any, len(settings))
+	for k, v := range settings {
+		out[k] = v
+	}
+	for _, k := range drop {
+		delete(out, k)
+	}
+	return out
 }
 
 func mergeRouteList(a, b []map[string]any) []map[string]any {

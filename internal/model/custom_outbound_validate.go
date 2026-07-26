@@ -52,7 +52,7 @@ func ValidateCustomOutboundsForKernel(outbounds []OutboundConfig, kernelType str
 				return fmt.Errorf("custom_outbounds[%d].protocol %q is not supported by kernel %q", i, outbound.Protocol, kernelType)
 			}
 		}
-		if err := validateOutboundSettings(i, outbound.Settings); err != nil {
+		if err := validateOutboundSettings(i, protocol, outbound.Settings); err != nil {
 			return err
 		}
 		key := strings.ToLower(tag)
@@ -82,8 +82,12 @@ func ValidateCustomOutboundsForKernel(outbounds []OutboundConfig, kernelType str
 	return nil
 }
 
-func validateOutboundSettings(index int, settings map[string]any) error {
+func validateOutboundSettings(index int, protocol string, settings map[string]any) error {
+	// 直连和拦截出站可以没有任何参数，其余协议至少要给出连接信息。
 	if len(settings) == 0 {
+		if !OutboundNeedsSettings(protocol) {
+			return nil
+		}
 		return fmt.Errorf("custom_outbounds[%d].settings is required", index)
 	}
 	for _, reservedKey := range []string{"tag", "protocol", "proxy_tag", "proxyTag"} {

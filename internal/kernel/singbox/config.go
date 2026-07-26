@@ -81,8 +81,17 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 // into a sing-box outbound object. sing-box uses a flat layout where all
 // protocol-specific fields sit at the top level alongside "type" and "tag".
 func outboundConfigToSingbox(oc model.OutboundConfig) M {
+	// 直连与拦截：面板允许填 xray 的原生名，这里翻译成 sing-box 的名字。
+	outboundType := oc.Protocol
+	switch {
+	case model.IsDirectOutbound(outboundType):
+		outboundType = "direct"
+	case model.IsBlockOutbound(outboundType):
+		outboundType = "block"
+	}
+
 	m := M{
-		"type": oc.Protocol,
+		"type": outboundType,
 		"tag":  oc.Tag,
 	}
 

@@ -1,5 +1,13 @@
 # 变更记录
 
+## v1.13-yz.7 - 2026-07-27
+
+- 自定义出站支持直连与拦截：面板可以填 `direct`/`freedom` 与 `block`/`blackhole`，由 Node 翻译成目标内核的原生名（xray 为 `freedom`/`blackhole`，sing-box 为 `direct`/`block`）。此前两个内核的白名单都不含这些协议，配了就会让节点启动失败。
+- 支持 `settings.send_through` 绑定出站源地址。xray 的 `sendThrough` 是 outbound 级字段，无法写在 `settings` 内，Node 会在生成配置时提升上来，并且不修改调用方持有的 settings。
+- 直连与拦截出站不再强制要求 `settings`，无参数的拦截出站可以直接使用。
+- `settings` 内的其余字段保持原样透传，不做跨内核翻译：两个内核的绑定与解析语义并不等价（sing-box 的 `prefer_ipv6` + `fallback_delay` 是连接级回落且可同时绑定 v4/v6 源地址，xray 的 `domainStrategy` 只影响解析顺序且 `sendThrough` 只能填一个地址），自动翻译会掩盖差异。
+- 以上均使用 Xray 自带能力，不改动 YZ-Xray-core。
+
 ## v1.13-yz.6 - 2026-07-27
 
 - 安装器默认内核由 `singbox` 改为 `xray`，一键安装命令不再需要显式传 `--kernel xray`；用新安装器覆盖旧安装时，该实例的内核会一并切换到 xray。

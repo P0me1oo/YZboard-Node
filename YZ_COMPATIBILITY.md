@@ -6,28 +6,28 @@
 
 | 项目 | 标识 |
 | --- | --- |
-| Node 发布版本 | `v1.13-yz.6` |
+| Node 发布版本 | `v1.13-yz.7` |
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.1` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | `724d2dfd7dea532fa4596e76a0c87a4d16da1ee0` |
+| Node Release Tag 对应 commit | 发布后回填 |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
-| Node Release 构建 | 固定来源 `v1.13-yz.6`；GitHub Actions run `30215416149`（`workflow_dispatch` 传入 `release_tag`，构建前校验 checkout commit 与 Tag 一致） |
+| Node Release 构建 | 发布后回填 |
 | Node Docker 标签 | 发布后回填 |
 | Node Docker manifest | 发布后回填 |
 | Node Docker OCI 标识 | 发布后回填 |
-| YZboard 兼容代码 commit | `e83551fb128149b593766c66d4022eb9ed3275c6`（面板版本 `1.1.0`） |
+| YZboard 兼容代码 commit | `90c11685eab03a68e167a3c0c969bd774a89e362`（面板版本 `1.2.1`） |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
 | Xray 上游 Tag commit | `50231eaff98ccc31b5cbd247a721c16e97fe5ec1` |
 | YZ-Xray-core fork 版本 | `v26.7.11-yz.1` |
 | YZ-Xray-core fork commit | `620bee93867095f73880056cdfb08bc54a15f69e` |
 | Node 中的 Xray replace | `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260724203739-620bee938670` |
-| YZboard 兼容标识 | `xray-v26.7.11-yz.1`（面板版本 `1.1.0`） |
+| YZboard 兼容标识 | `xray-v26.7.11-yz.1`（面板版本 `1.2.1`） |
 | sing-box `require` 版本 | `v1.13.2` |
 | sing-box 实际 replacement | `github.com/cedar2025/sing-box v1.14.0-alpha.2.0.20260316103356-2e665cb7e295` |
 
-Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.5` 支持面板下发的 `relay` 段实现单入口多落地中转，`yz.6` 把安装器默认内核改为 xray 并新增 `xbctl config kernel` 切换命令，两者都不改变 Xray fork 基线。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
+Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.5` 支持面板下发的 `relay` 段实现单入口多落地中转，`yz.6` 把安装器默认内核改为 xray 并新增 `xbctl config kernel` 切换命令，`yz.7` 让自定义出站支持直连、拦截与源地址绑定，均不改变 Xray fork 基线。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
 
 先前的 `v0.1.0-yz.1` Tag 保留用于审计，但其版本低于上游 `v1.13`，不作为部署或升级目标，也不创建对应 Release。
 
@@ -44,13 +44,14 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 - 面板 `relay` 段与 `relay_traffic` 上报字段属于 YZboard `1.1.0` 起的接口；旧面板不下发该字段时 Node 行为不变。
 - 安装器从 `yz.6` 起默认写入 `kernel.type: xray`。代码层缺省仍为 `singbox`，因此已有配置不会因升级二进制而被动改内核；切换需要显式执行 `xbctl config kernel <xray|singbox>` 或用新安装器覆盖安装。
 - xray 可承载的入站协议为 vmess、vless、trojan、shadowsocks、hysteria；tuic、naive、anytls、mieru、socks、http 只能由 sing-box 承载。安装器和 `xbctl config kernel` 都会在未显式确认时拒绝把这些节点切到 xray。
+- 自定义出站从 `yz.7` 起接受 `direct`/`freedom` 与 `block`/`blackhole`，由 Node 翻译成目标内核的原生名；`settings.send_through` 在 xray 下提升为 outbound 级的 `sendThrough`。`settings` 内其余字段原样透传，需按目标内核的字段名填写，跨内核切换时要同步调整。
 
 ## 构建与版本检查
 
 发布构建示例：
 
 ```bash
-VERSION=v1.13-yz.6 make build-linux
+VERSION=v1.13-yz.7 make build-linux
 ```
 
 两个二进制的 `-v`/`version` 输出都包含：
@@ -59,7 +60,9 @@ VERSION=v1.13-yz.6 make build-linux
 - Xray 上游 Tag/commit、YZ fork 版本/commit，以及实际模块替换版本；
 - sing-box 请求版本和实际 replacement 版本。
 
-`v1.13-yz.6` Release 资产校验值：
+`v1.13-yz.7` 尚未构建和发布，Release 资产校验值发布后回填。
+
+`v1.13-yz.6` 历史 Release 资产校验值：
 
 | 资产 | SHA-256 |
 | --- | --- |
@@ -117,8 +120,8 @@ VERSION=v1.13-yz.6 make build-linux
 ```bash
 go list -m -json github.com/xtls/xray-core
 go test -v -race -count=1 ./...
-go build -ldflags "-X main.version=v1.13-yz.6" ./cmd/xboard-node
-go build -ldflags "-X main.version=v1.13-yz.6" ./cmd/xbctl
+go build -ldflags "-X main.version=v1.13-yz.7" ./cmd/xboard-node
+go build -ldflags "-X main.version=v1.13-yz.7" ./cmd/xbctl
 ```
 
 安装器和升级器从同一 Node Release 下载 `xboard-node` 和 `xbctl`，并使用该 Release 的 `SHA256SUMS` 校验。面板通过 `releases/latest/download/install.sh` 获取最新正式安装器，安装器再通过 `latest` 解析同一正式 Release；需要回滚时必须传入明确的旧 Node Tag。`.github/workflows/ci.yml` 已配置 `v*` Tag 推送触发，但截至 `v1.13-yz.4`，推送 Tag 实际未产生任何 workflow run（GitHub 侧未创建记录），`yz.2`、`yz.3`、`yz.4` 均通过 `workflow_dispatch` 传入 `release_tag` 发布。发布来源仍然固定：workflow 会 checkout 该 Tag 并校验 commit 一致后才继续构建。根因待查，暂按手动触发执行。在 Release 记录和六个资产出现前不能把 Tag 视为已发布。Xray fork 的回滚边界由 Node `go.mod` 中记录的 pseudo-version 和对应 fork commit 确定。
