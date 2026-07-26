@@ -6,16 +6,16 @@
 
 | 项目 | 标识 |
 | --- | --- |
-| Node 发布版本 | `v1.13-yz.3` |
+| Node 发布版本 | `v1.13-yz.4` |
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.1` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | `5008b1763d8c1e79bcb57203b3a66b6deca85358` |
+| Node Release Tag 对应 commit | 发布后回填 |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
-| Node Release 构建 | 固定来源 `v1.13-yz.3`；GitHub Actions run `30173320788` |
-| Node Docker 标签 | `latest`、`v1.13-yz.3`、`5008b1763d8c1e79bcb57203b3a66b6deca85358` |
-| Node Docker manifest | `sha256:87ac8bcc0c42012684958c3f680ef80aa22b421424082263ff55d93a7b47c7b6`（`linux/amd64`、`linux/arm64`） |
-| Node Docker OCI 标识 | revision `5008b1763d8c1e79bcb57203b3a66b6deca85358`；version `v1.13-yz.3` |
+| Node Release 构建 | 发布后回填 |
+| Node Docker 标签 | 发布后回填 |
+| Node Docker manifest | 发布后回填 |
+| Node Docker OCI 标识 | 发布后回填 |
 | YZboard 兼容代码 commit | `c142d06be7b76bfd4579189674dbcf81e53756d9` |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
@@ -27,7 +27,7 @@
 | sing-box `require` 版本 | `v1.13.2` |
 | sing-box 实际 replacement | `github.com/cedar2025/sing-box v1.14.0-alpha.2.0.20260316103356-2e665cb7e295` |
 
-Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.3` 修复 Hysteria2 最终配置、进程退出、健康状态和设备同步，并为最新正式 Release 提供稳定安装入口。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
+Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.4` 增加 `kernel.reality_min_client_ver`，为 Xray REALITY 入站显式注入 `minClientVer`，默认 `0.0.0`，不改变 Xray fork 基线和面板接口。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
 
 先前的 `v0.1.0-yz.1` Tag 保留用于审计，但其版本低于上游 `v1.13`，不作为部署或升级目标，也不创建对应 Release。
 
@@ -37,6 +37,7 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 - Xray fork 提供的 Dispatcher、用户级限速、统计计数器和在线 IP/连接状态能力继续由 Node 使用。
 - Node 的流量方向保持 `[upload, download]`，由内核累计计数器交给 tracker 计算增量，再由面板客户端上报。
 - 每次刷出的报告批次带有进程启动标识和递增序号组成的 `report_id`；HTTP 失败时保留完整批次并复用 ID，避免面板重复累计。
+- Xray REALITY 入站的 `realitySettings.minClientVer` 由 Node 显式写入，默认 `0.0.0`，可通过 `kernel.reality_min_client_ver` 覆盖。缺省该字段时 v26.7.11 会使用内置下限 `26.3.27`，低于该版本的客户端握手会被拒绝。
 - v26.7.11 已移除未加密 Shadowsocks。历史配置中的 `none`/`plain` 会显式返回错误，不会静默转换成其他加密算法。
 - `go.mod` 的 Xray `require` 版本只用于保持模块路径兼容；实际代码由 `replace` 固定到上表中的 fork pseudo-version。提交前应使用 `go list -m -json github.com/xtls/xray-core` 复核替换路径和版本。
 
@@ -45,7 +46,7 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 发布构建示例：
 
 ```bash
-VERSION=v1.13-yz.3 make build-linux
+VERSION=v1.13-yz.4 make build-linux
 ```
 
 两个二进制的 `-v`/`version` 输出都包含：
@@ -54,7 +55,9 @@ VERSION=v1.13-yz.3 make build-linux
 - Xray 上游 Tag/commit、YZ fork 版本/commit，以及实际模块替换版本；
 - sing-box 请求版本和实际 replacement 版本。
 
-`v1.13-yz.3` Release 资产校验值：
+`v1.13-yz.4` 尚未构建和发布，Release 资产校验值发布后回填。
+
+`v1.13-yz.3` 历史 Release 资产校验值：
 
 | 资产 | SHA-256 |
 | --- | --- |
@@ -79,8 +82,8 @@ VERSION=v1.13-yz.3 make build-linux
 ```bash
 go list -m -json github.com/xtls/xray-core
 go test -v -race -count=1 ./...
-go build -ldflags "-X main.version=v1.13-yz.3" ./cmd/xboard-node
-go build -ldflags "-X main.version=v1.13-yz.3" ./cmd/xbctl
+go build -ldflags "-X main.version=v1.13-yz.4" ./cmd/xboard-node
+go build -ldflags "-X main.version=v1.13-yz.4" ./cmd/xbctl
 ```
 
 安装器和升级器从同一 Node Release 下载 `xboard-node` 和 `xbctl`，并使用该 Release 的 `SHA256SUMS` 校验。面板通过 `releases/latest/download/install.sh` 获取最新正式安装器，安装器再通过 `latest` 解析同一正式 Release；需要回滚时必须传入明确的旧 Node Tag。GitHub Release 由 `.github/workflows/ci.yml` 的 `v*` Tag 事件生成，在 Release 记录和六个资产出现前不能把 Tag 视为已发布。Xray fork 的回滚边界由 Node `go.mod` 中记录的 pseudo-version 和对应 fork commit 确定。

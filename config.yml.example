@@ -24,3 +24,9 @@
 #       token: "machine-token-2"
 #     log:
 #       level: "debug"   # override for this instance only
+
+# ── Xray REALITY ──
+# kernel:
+#   type: "xray"
+#   reality_min_client_ver: "0.0.0"   # REALITY 最低客户端版本，三段数字；留空按 0.0.0 处理
+#                                     # 详见 docs-xray-reality.md

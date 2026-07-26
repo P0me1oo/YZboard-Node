@@ -327,7 +327,6 @@ kernel:
 	}
 }
 
-
 func TestLoadRoot_LegacyConfigNormalizesToSingleInstance(t *testing.T) {
 	path := writeTemp(t, `
 panel:
@@ -541,5 +540,109 @@ func TestInheritFrom_AutoTLSInheritedWhenChildHasNoCertConfig(t *testing.T) {
 	child.inheritFrom(parent)
 	if !child.Cert.AutoTLS {
 		t.Error("auto_tls should be inherited when child has no cert config")
+	}
+}
+
+func TestLoad_RealityMinClientVerDefault(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://panel.example.com"
+  token: "secret-token"
+  node_id: 1
+kernel:
+  type: xray
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Kernel.RealityMinClientVer != DefaultRealityMinClientVer {
+		t.Errorf("reality_min_client_ver: got %q, want %q", cfg.Kernel.RealityMinClientVer, DefaultRealityMinClientVer)
+	}
+	if got := cfg.Kernel.RealityMinClientVersion(); got != DefaultRealityMinClientVer {
+		t.Errorf("RealityMinClientVersion(): got %q, want %q", got, DefaultRealityMinClientVer)
+	}
+}
+
+func TestLoad_RealityMinClientVerOverride(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://panel.example.com"
+  token: "secret-token"
+  node_id: 1
+kernel:
+  type: xray
+  reality_min_client_ver: "26.3.27"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Kernel.RealityMinClientVersion(); got != "26.3.27" {
+		t.Errorf("RealityMinClientVersion(): got %q, want %q", got, "26.3.27")
+	}
+}
+
+func TestLoad_RealityMinClientVerInvalid(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://panel.example.com"
+  token: "secret-token"
+  node_id: 1
+kernel:
+  type: xray
+  reality_min_client_ver: "1.2"
+`)
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load should reject a two-segment reality_min_client_ver")
+	}
+}
+
+func TestValidateRealityMinClientVer(t *testing.T) {
+	valid := []string{"0.0.0", "1.8.4", "26.3.27", "255.255.255"}
+	for _, v := range valid {
+		if err := ValidateRealityMinClientVer(v); err != nil {
+			t.Errorf("ValidateRealityMinClientVer(%q) = %v, want nil", v, err)
+		}
+	}
+	invalid := []string{"", "1", "1.2", "1.2.3.4", "1.2.x", "1.2.256", "-1.0.0", "v1.2.3", "1.2.3 "}
+	for _, v := range invalid {
+		if err := ValidateRealityMinClientVer(v); err == nil {
+			t.Errorf("ValidateRealityMinClientVer(%q) = nil, want error", v)
+		}
+	}
+}
+
+func TestRealityMinClientVersion_FallbackForUnvalidatedConfig(t *testing.T) {
+	// Configs built in code never pass through Load; the resolver must still
+	// produce a usable value instead of leaking a malformed one into xray.
+	cases := map[string]string{
+		"":        DefaultRealityMinClientVer,
+		"   ":     DefaultRealityMinClientVer,
+		"broken":  DefaultRealityMinClientVer,
+		"1.2.3.4": DefaultRealityMinClientVer,
+		" 1.8.4 ": "1.8.4",
+		"26.3.27": "26.3.27",
+	}
+	for in, want := range cases {
+		k := KernelConfig{RealityMinClientVer: in}
+		if got := k.RealityMinClientVersion(); got != want {
+			t.Errorf("RealityMinClientVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestInheritFrom_RealityMinClientVer(t *testing.T) {
+	parent := &Config{Kernel: KernelConfig{RealityMinClientVer: "1.8.4"}}
+	child := &Config{}
+	child.inheritFrom(parent)
+	if child.Kernel.RealityMinClientVer != "1.8.4" {
+		t.Errorf("inherited value: got %q, want %q", child.Kernel.RealityMinClientVer, "1.8.4")
+	}
+
+	explicit := &Config{Kernel: KernelConfig{RealityMinClientVer: "0.0.0"}}
+	explicit.inheritFrom(parent)
+	if explicit.Kernel.RealityMinClientVer != "0.0.0" {
+		t.Errorf("explicit value overwritten: got %q", explicit.Kernel.RealityMinClientVer)
 	}
 }

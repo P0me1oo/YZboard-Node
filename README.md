@@ -19,7 +19,7 @@ Node backend for [YZboard](https://github.com/P0me1oo/YZboard). Supports `sing-b
 ```bash
 docker run -d --restart=always --network=host \
   -e apiHost=https://panel.com -e apiKey=TOKEN -e nodeID=1 \
-  ghcr.io/p0me1oo/yzboard-node:v1.13-yz.3
+  ghcr.io/p0me1oo/yzboard-node:v1.13-yz.4
 ```
 
 ### Installer (Linux systemd)
@@ -73,6 +73,7 @@ Legacy single-panel config is fully compatible. Appending bindings auto-migrates
 
 ## Extensions
 
+- Xray REALITY 最低客户端版本: [docs-xray-reality.md](docs-xray-reality.md)
 - Custom routes: [docs-custom-routes.md](docs-custom-routes.md)
 - Custom outbounds: [docs-custom-outbounds.md](docs-custom-outbounds.md)
 - DNS providers (ACME DNS-01): [docs-dns-providers.md](docs-dns-providers.md)

@@ -33,7 +33,7 @@ WORKDIR /etc/xboard-node
 #     -e apiHost=https://panel.example.com \
 #     -e apiKey=YOUR_TOKEN \
 #     -e nodeID=1 \
-#     ghcr.io/p0me1oo/yzboard-node:v1.13-yz.3
+#     ghcr.io/p0me1oo/yzboard-node:v1.13-yz.4
 #
 # Supported env vars:
 #   apiHost  / API_HOST    → panel URL

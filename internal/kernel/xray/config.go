@@ -68,7 +68,7 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 		"outbounds": outbounds,
 	}
 
-	inbound := buildInbound(nc, users, tc)
+	inbound := buildInbound(kcfg, nc, users, tc)
 	if inbound != nil {
 		cfg["inbounds"] = []M{inbound}
 	} else {
@@ -197,7 +197,7 @@ func xrayLogLevel(singboxLevel string) string {
 	}
 }
 
-func buildInbound(nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+func buildInbound(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	listenAddr := "::"
 	if nc.ListenIP != "" {
 		listenAddr = nc.ListenIP
@@ -216,17 +216,17 @@ func buildInbound(nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert)
 
 	switch nc.Protocol {
 	case "vmess":
-		return buildVMess(base, nc, users, tc)
+		return buildVMess(base, kcfg, nc, users, tc)
 	case "vless":
-		return buildVLESS(base, nc, users, tc)
+		return buildVLESS(base, kcfg, nc, users, tc)
 	case "trojan":
-		return buildTrojan(base, nc, users, tc)
+		return buildTrojan(base, kcfg, nc, users, tc)
 	case "shadowsocks":
 		return buildShadowsocks(base, nc, users)
 	case "socks":
 		return buildSocks(base, users)
 	case "http":
-		return buildHTTP(base, nc, users, tc)
+		return buildHTTP(base, kcfg, nc, users, tc)
 	case "hysteria":
 		return buildHysteria(base, nc, users, tc)
 	default:
@@ -240,7 +240,7 @@ func userEmail(userID int) string {
 	return fmt.Sprintf("user@%d", userID)
 }
 
-func buildVMess(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+func buildVMess(base M, kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	clients := make([]M, 0, len(users))
 	for _, u := range users {
 		clients = append(clients, M{
@@ -251,11 +251,11 @@ func buildVMess(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TL
 	}
 	base["settings"] = M{"clients": clients}
 
-	applyStreamSettings(base, nc, tc)
+	applyStreamSettings(base, kcfg, nc, tc)
 	return base
 }
 
-func buildVLESS(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+func buildVLESS(base M, kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	clients := make([]M, 0, len(users))
 	for _, u := range users {
 		client := M{
@@ -276,11 +276,11 @@ func buildVLESS(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TL
 		"decryption": decryption,
 	}
 
-	applyStreamSettings(base, nc, tc)
+	applyStreamSettings(base, kcfg, nc, tc)
 	return base
 }
 
-func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+func buildTrojan(base M, kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	clients := make([]M, len(users))
 	for i := range users {
 		u := &users[i]
@@ -291,7 +291,7 @@ func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.T
 	}
 	base["settings"] = M{"clients": clients}
 
-	applyStreamSettings(base, nc, tc)
+	applyStreamSettings(base, kcfg, nc, tc)
 
 	// Trojan requires TLS or Reality to be enabled.
 	// If the panel didn't explicitly set TLS=1 or TLS=2, but we have certs,
@@ -299,7 +299,7 @@ func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.T
 	ss, _ := base["streamSettings"].(M)
 	if security, ok := ss["security"].(string); !ok || (security != "tls" && security != "reality") {
 		nc.TLS = 1 // Force internal state to trigger TLS build in applyStreamSettings
-		applyStreamSettings(base, nc, tc)
+		applyStreamSettings(base, kcfg, nc, tc)
 	}
 
 	return base
@@ -380,7 +380,7 @@ func buildSocks(base M, users []model.UserSpec) M {
 	return base
 }
 
-func buildHTTP(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+func buildHTTP(base M, kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	base["protocol"] = "http"
 	accounts := make([]M, 0, len(users))
 	for _, u := range users {
@@ -395,7 +395,7 @@ func buildHTTP(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLS
 	}
 
 	if nc.TLS == 1 {
-		applyStreamSettings(base, nc, tc)
+		applyStreamSettings(base, kcfg, nc, tc)
 	}
 	return base
 }
@@ -462,7 +462,7 @@ func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel
 	return base
 }
 
-func applyStreamSettings(base M, nc *model.NodeSpec, tc kernel.TLSCert) {
+func applyStreamSettings(base M, kcfg config.KernelConfig, nc *model.NodeSpec, tc kernel.TLSCert) {
 	ss := M{}
 
 	// Network / transport
@@ -595,7 +595,7 @@ func applyStreamSettings(base M, nc *model.NodeSpec, tc kernel.TLSCert) {
 		ss["tlsSettings"] = tlsSettings
 	} else if nc.TLS == 2 {
 		ss["security"] = "reality"
-		ss["realitySettings"] = buildRealitySettings(nc)
+		ss["realitySettings"] = buildRealitySettings(kcfg, nc)
 	}
 
 	// Proxy Protocol
@@ -611,8 +611,13 @@ func applyStreamSettings(base M, nc *model.NodeSpec, tc kernel.TLSCert) {
 	base["streamSettings"] = ss
 }
 
-func buildRealitySettings(nc *model.NodeSpec) M {
-	reality := M{"show": false}
+func buildRealitySettings(kcfg config.KernelConfig, nc *model.NodeSpec) M {
+	// minClientVer is always emitted: xray-core falls back to its own built-in
+	// floor (26.3.27) when the field is absent, which would reject older clients.
+	reality := M{
+		"show":         false,
+		"minClientVer": kcfg.RealityMinClientVersion(),
+	}
 
 	if nc.TLSSettings == nil {
 		return reality

@@ -740,3 +740,80 @@ func TestExtractECHServerKeys(t *testing.T) {
 		})
 	}
 }
+
+// realityNodeConfig builds a REALITY node whose keys and short IDs are shaped
+// the way xray-core requires, so the generated config can be parsed for real.
+func realityNodeConfig() *panel.NodeConfig {
+	return &panel.NodeConfig{
+		Protocol:   "vless",
+		ServerPort: 443,
+		Flow:       "xtls-rprx-vision",
+		TLS:        2,
+		TLSSettings: map[string]interface{}{
+			"private_key": base64.RawURLEncoding.EncodeToString(make([]byte, 32)),
+			"server_name": "www.example.com",
+			"short_id":    "0123456789abcdef",
+		},
+	}
+}
+
+func realitySettingsOf(t *testing.T, kcfg config.KernelConfig, nc *panel.NodeConfig) map[string]interface{} {
+	t.Helper()
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, kernel.TLSCert{})
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	inbounds := parsed["inbounds"].([]interface{})
+	ss := inbounds[0].(map[string]interface{})["streamSettings"].(map[string]interface{})
+	reality, ok := ss["realitySettings"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("realitySettings = %#v, want object", ss["realitySettings"])
+	}
+	return reality
+}
+
+func TestBuildConfig_RealityMinClientVerDefault(t *testing.T) {
+	// testKernelCfg leaves reality_min_client_ver unset: the generated config
+	// must still pin 0.0.0, otherwise xray-core falls back to its own floor.
+	reality := realitySettingsOf(t, testKernelCfg, realityNodeConfig())
+	if reality["minClientVer"] != config.DefaultRealityMinClientVer {
+		t.Errorf("minClientVer = %v, want %v", reality["minClientVer"], config.DefaultRealityMinClientVer)
+	}
+}
+
+func TestBuildConfig_RealityMinClientVerOverride(t *testing.T) {
+	kcfg := testKernelCfg
+	kcfg.RealityMinClientVer = "1.8.4"
+	reality := realitySettingsOf(t, kcfg, realityNodeConfig())
+	if reality["minClientVer"] != "1.8.4" {
+		t.Errorf("minClientVer = %v, want 1.8.4", reality["minClientVer"])
+	}
+}
+
+func TestBuildConfig_RealityMinClientVerInvalidFallsBackToDefault(t *testing.T) {
+	kcfg := testKernelCfg
+	kcfg.RealityMinClientVer = "not-a-version"
+	reality := realitySettingsOf(t, kcfg, realityNodeConfig())
+	if reality["minClientVer"] != config.DefaultRealityMinClientVer {
+		t.Errorf("minClientVer = %v, want %v", reality["minClientVer"], config.DefaultRealityMinClientVer)
+	}
+}
+
+func TestBuildConfig_RealityAcceptedByXray(t *testing.T) {
+	for _, minVer := range []string{"", "0.0.0", "1.8.4", "26.3.27"} {
+		kcfg := testKernelCfg
+		kcfg.RealityMinClientVer = minVer
+		data, err := marshalConfig(kcfg, testNodeSpec(realityNodeConfig()), testUsers, kernel.TLSCert{})
+		if err != nil {
+			t.Fatalf("marshalConfig(%q) error = %v", minVer, err)
+		}
+		if _, err := serial.LoadJSONConfig(bytes.NewReader(data)); err != nil {
+			t.Fatalf("Xray rejected REALITY config with reality_min_client_ver %q: %v", minVer, err)
+		}
+	}
+}

@@ -1,5 +1,12 @@
 # 变更记录
 
+## v1.13-yz.4 - 2026-07-26
+
+- 新增 `kernel.reality_min_client_ver` 配置，生成 Xray REALITY 入站时显式注入 `realitySettings.minClientVer`，默认 `0.0.0`；未填写、留空或没有 `kernel` 段时同样使用该默认值，避免 xray-core 回退到内置下限 `26.3.27` 拒绝旧客户端。
+- 允许填写其他合法的三段版本号（每段 `0-255`）抬高客户端版本门槛；格式非法时在启动校验阶段直接报错，不带错误配置启动内核。
+- `xbctl` 重写配置文件时保留 `kernel.reality_min_client_ver`，改绑节点不会丢失已有取值。
+- 新增简体中文文档 `docs-xray-reality.md`，说明取值规则、多实例继承和验证方式。
+
 ## v1.13-yz.3 - 2026-07-26
 
 - 修复 Xray Hysteria2 入站缺少协议层 `settings.version` 导致的 `version != 2` 启动失败，并使用 Xray 自身 JSON 解析器增加回归测试。

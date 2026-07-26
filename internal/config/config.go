@@ -142,6 +142,44 @@ type KernelConfig struct {
 	// customization of dns, outbounds, endpoints, route, experimental, etc.
 	// Compatible with V2bX OriginalPath format.
 	CustomConfig string `yaml:"custom_config"`
+
+	// RealityMinClientVer sets realitySettings.minClientVer on Xray REALITY
+	// inbounds. Format: three decimal segments "x.y.z", each in 0-255.
+	// Empty falls back to DefaultRealityMinClientVer, which keeps every client
+	// version accepted — xray-core applies its own higher floor when the field
+	// is missing from the generated config.
+	// Only used by the xray kernel; sing-box REALITY has no equivalent option.
+	RealityMinClientVer string `yaml:"reality_min_client_ver"`
+}
+
+// DefaultRealityMinClientVer is the minClientVer written to Xray REALITY
+// inbounds when kernel.reality_min_client_ver is not configured.
+const DefaultRealityMinClientVer = "0.0.0"
+
+// ValidateRealityMinClientVer checks the version form xray-core accepts for
+// realitySettings.minClientVer: exactly three decimal segments, each 0-255.
+func ValidateRealityMinClientVer(v string) error {
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return fmt.Errorf("must be three numeric segments like %s, got %q", DefaultRealityMinClientVer, v)
+	}
+	for _, part := range parts {
+		if _, err := strconv.ParseUint(part, 10, 8); err != nil {
+			return fmt.Errorf("segment %q must be a number in 0-255", part)
+		}
+	}
+	return nil
+}
+
+// RealityMinClientVersion returns the effective minClientVer for Xray REALITY
+// inbounds. Load rejects malformed values up front; the fallback here also
+// covers configs built in code that never pass through Load.
+func (k KernelConfig) RealityMinClientVersion() string {
+	v := strings.TrimSpace(k.RealityMinClientVer)
+	if v == "" || ValidateRealityMinClientVer(v) != nil {
+		return DefaultRealityMinClientVer
+	}
+	return v
 }
 
 type CertConfig struct {
@@ -507,6 +545,9 @@ func (c *Config) inheritFrom(parent *Config) {
 	if c.Kernel.CustomConfig == "" {
 		c.Kernel.CustomConfig = parent.Kernel.CustomConfig
 	}
+	if c.Kernel.RealityMinClientVer == "" {
+		c.Kernel.RealityMinClientVer = parent.Kernel.RealityMinClientVer
+	}
 	if len(c.Kernel.CustomOutbound) == 0 {
 		c.Kernel.CustomOutbound = parent.Kernel.CustomOutbound
 	}
@@ -565,6 +606,9 @@ func (c *Config) setDefaultsFrom(baseDir string) {
 	}
 	if c.Kernel.LogLevel == "" {
 		c.Kernel.LogLevel = "warn"
+	}
+	if strings.TrimSpace(c.Kernel.RealityMinClientVer) == "" {
+		c.Kernel.RealityMinClientVer = DefaultRealityMinClientVer
 	}
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
@@ -723,6 +767,11 @@ func (c *Config) validate() error {
 	case "singbox", "xray":
 	default:
 		return fmt.Errorf("kernel.type must be 'singbox' or 'xray', got '%s'", c.Kernel.Type)
+	}
+	if v := strings.TrimSpace(c.Kernel.RealityMinClientVer); v != "" {
+		if err := ValidateRealityMinClientVer(v); err != nil {
+			return fmt.Errorf("kernel.reality_min_client_ver: %w", err)
+		}
 	}
 	if c.Cert.AutoTLS && c.Cert.Domain == "" {
 		return fmt.Errorf("cert.domain is required when cert.auto_tls is enabled")
