@@ -10,13 +10,13 @@
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.1` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | 发布后回填 |
+| Node Release Tag 对应 commit | `2aacb4c30007c11406cd61095f45ac84f835f80e` |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
 | Node Release 构建 | 发布后回填 |
 | Node Docker 标签 | 发布后回填 |
 | Node Docker manifest | 发布后回填 |
 | Node Docker OCI 标识 | 发布后回填 |
-| YZboard 兼容代码 commit | 发布后回填（面板版本 `1.1.0`） |
+| YZboard 兼容代码 commit | `e83551fb128149b593766c66d4022eb9ed3275c6`（面板版本 `1.1.0`） |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
 | Xray 上游 Tag commit | `50231eaff98ccc31b5cbd247a721c16e97fe5ec1` |
