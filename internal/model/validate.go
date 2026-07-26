@@ -39,6 +39,9 @@ func ValidateNodeSpec(n *NodeSpec, kcfg config.KernelConfig) error {
 	if err := validateTransportKernel(n.Network, kernelType); err != nil {
 		return err
 	}
+	if err := validateRelay(n, kernelType, availableTags); err != nil {
+		return fmt.Errorf("validate relay: %w", err)
+	}
 	return nil
 }
 

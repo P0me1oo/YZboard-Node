@@ -53,13 +53,16 @@ type ReportPayload struct {
 	// 为空时兼容未提供批次标识的旧调用方。
 	ReportID string
 	Traffic  map[int][2]int64
-	Alive    map[int][]string
-	Online   map[int]int
-	CPU      float64
-	Mem      [2]uint64
-	Swap     [2]uint64
-	Disk     [2]uint64
-	Metrics  map[string]interface{}
+	// RelayTraffic 是入口节点上各中转逻辑节点独立出站的流量，键为逻辑节点 ID。
+	// 只作为落地线路运营统计，面板不据此扣除用户套餐。
+	RelayTraffic map[int][2]int64
+	Alive        map[int][]string
+	Online       map[int]int
+	CPU          float64
+	Mem          [2]uint64
+	Swap         [2]uint64
+	Disk         [2]uint64
+	Metrics      map[string]interface{}
 }
 
 type PushClient interface {

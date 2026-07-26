@@ -106,13 +106,25 @@ func (c *Client) Handshake() (*HandshakeResponse, error) {
 // The optional metrics map allows the node to submit richer telemetry
 // (active connections, per-core CPU, GC stats, limiter hits, etc.)
 // without changing the core schema of status.
-func (c *Client) Report(reportID string, traffic map[int][2]int64, alive map[int][]string, online map[int]int,
+// relayTraffic carries per-logical-node transit traffic measured on a relay
+// entry's internal outbounds; the panel books it as landing-line operating data
+// only, never as user quota.
+func (c *Client) Report(reportID string, traffic map[int][2]int64, relayTraffic map[int][2]int64,
+	alive map[int][]string, online map[int]int,
 	cpu float64, mem, swap, disk [2]uint64,
 	metrics map[string]interface{},
 ) error {
 	payload := make(map[string]interface{})
 	if reportID != "" {
 		payload["report_id"] = reportID
+	}
+
+	if len(relayTraffic) > 0 {
+		r := make(map[string][2]int64, len(relayTraffic))
+		for nodeID, d := range relayTraffic {
+			r[strconv.Itoa(nodeID)] = d
+		}
+		payload["relay_traffic"] = r
 	}
 
 	if len(traffic) > 0 {

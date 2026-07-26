@@ -45,6 +45,12 @@ type Tracker struct {
 	// Protected by mu — written by Process, drained by FlushTraffic.
 	pendingTraffic map[int][2]int64
 
+	// Relay bookkeeping mirrors the user maps but is keyed by logical node ID
+	// and reported on a separate channel, so landing-line traffic never mixes
+	// into user quota accounting. Protected by mu.
+	lastSeenRelay map[int][2]int64
+	pendingRelay  map[int][2]int64
+
 	// live holds the current snapshot, swapped atomically.
 	// Readers load this pointer without any lock.
 	live atomic.Pointer[snapshot]
@@ -61,6 +67,8 @@ func New() *Tracker {
 	t := &Tracker{
 		lastSeen:       make(map[int][2]int64),
 		pendingTraffic: make(map[int][2]int64),
+		lastSeenRelay:  make(map[int][2]int64),
+		pendingRelay:   make(map[int][2]int64),
 		aliveIPsBuf:    make(map[int][]string),
 	}
 	// Publish initial empty snapshot.

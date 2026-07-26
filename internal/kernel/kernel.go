@@ -103,6 +103,15 @@ type Kernel interface {
 	ClearGlobalDevices()
 }
 
+// RelayTrafficReader is an optional capability implemented by kernels that can
+// measure per-logical-node traffic on a relay entry's internal outbounds.
+//
+// The returned map is cumulative and keyed by logical node ID. It is landing-line
+// operating data reported on its own channel; it must not feed user billing.
+type RelayTrafficReader interface {
+	GetRelayTraffic(ctx context.Context) (map[int][2]int64, error)
+}
+
 // ComputeHash returns a hash of config + user identities that would
 // require a kernel restart/reconstruction if changed.
 func ComputeHash(nc *model.NodeSpec, users []model.UserSpec) string {

@@ -359,7 +359,9 @@ func (s *Service) initialSetup(ctx context.Context) error {
 		"users", len(bootstrap.Users),
 	)
 
-	if len(bootstrap.Users) == 0 {
+	// A landing node serves only the entry server's internal inbound and never
+	// receives panel users, so an empty user set is its steady state.
+	if len(bootstrap.Users) == 0 && !bootstrap.Config.IsRelayLanding() {
 		nlog.Core().Warn("no users, kernel will not start until users are available")
 		s.markMailboxReadyAndDrain(ctx)
 		return nil
@@ -812,7 +814,7 @@ func (s *Service) ensureRunning() bool {
 	if s.kernel.IsRunning() {
 		return true
 	}
-	if len(s.lastUsers) > 0 && s.lastConfig != nil {
+	if s.lastConfig != nil && (len(s.lastUsers) > 0 || s.lastConfig.IsRelayLanding()) {
 		return s.startKernel(s.lastConfig, s.lastUsers)
 	}
 	return false
@@ -965,7 +967,11 @@ func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged 
 		return
 	}
 
-	if s.lastConfig == nil || len(s.lastUsers) == 0 {
+	// A landing node serves only the internal transit inbound, so an empty user
+	// set is its normal state and must not shut the kernel down.
+	isLanding := s.lastConfig != nil && s.lastConfig.IsRelayLanding()
+
+	if s.lastConfig == nil || (len(s.lastUsers) == 0 && !isLanding) {
 		if len(s.lastUsers) == 0 {
 			s.kernel.Stop()
 			s.appliedState.Users = nil
@@ -1003,6 +1009,7 @@ func (s *Service) trackAndEnforce(ctx context.Context) {
 	}
 
 	s.tracker.Process(traffic, aliveIPs, connCount)
+	s.trackRelayTraffic(ctx)
 
 	// Only log stats if there's actual traffic or connections
 	if connCount > 0 || len(traffic) > 0 {
@@ -1071,6 +1078,7 @@ func (s *Service) takeReportBatch() *reportBatch {
 	s.reportMu.Unlock()
 
 	traffic := cloneTraffic(s.tracker.FlushTraffic())
+	relayTraffic := cloneTraffic(s.tracker.FlushRelayTraffic())
 	aliveIPs := cloneAliveIPs(s.tracker.FlushAliveIPs())
 	status := monitor.Collect()
 	metrics := s.buildMetrics(status)
@@ -1080,9 +1088,10 @@ func (s *Service) takeReportBatch() *reportBatch {
 	return &reportBatch{
 		id: reportID,
 		payload: controlplane.ReportPayload{
-			ReportID: reportID,
-			Traffic:  traffic,
-			Alive:    aliveIPs,
+			ReportID:     reportID,
+			Traffic:      traffic,
+			RelayTraffic: relayTraffic,
+			Alive:        aliveIPs,
 			Online:   s.tracker.CurrentOnline(),
 			CPU:      status.CPU,
 			Mem:      [2]uint64{status.MemTotal, status.MemUsed},
@@ -1091,6 +1100,24 @@ func (s *Service) takeReportBatch() *reportBatch {
 			Metrics:  metrics,
 		},
 	}
+}
+
+// trackRelayTraffic collects per-logical-node traffic from the entry's internal
+// outbounds. Kernels without the capability are silently skipped.
+func (s *Service) trackRelayTraffic(ctx context.Context) {
+	if s.lastConfig == nil || !s.lastConfig.IsRelayEntry() {
+		return
+	}
+	reader, ok := s.kernel.(kernel.RelayTrafficReader)
+	if !ok {
+		return
+	}
+	relay, err := reader.GetRelayTraffic(ctx)
+	if err != nil {
+		nlog.Core().Debug("get relay traffic failed", "error", err)
+		return
+	}
+	s.tracker.ProcessRelay(relay)
 }
 
 func (s *Service) nextReportID() string {

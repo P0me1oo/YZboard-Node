@@ -256,6 +256,7 @@ func TestReportIncludesBatchID(t *testing.T) {
 	err := client.Report(
 		"boot-1-1",
 		map[int][2]int64{1: {10, 20}},
+		map[int][2]int64{7: {30, 40}},
 		map[int][]string{1: {"192.0.2.10"}},
 		map[int]int{1: 1},
 		1.5,
@@ -269,6 +270,13 @@ func TestReportIncludesBatchID(t *testing.T) {
 	}
 	if got := received["report_id"]; got != "boot-1-1" {
 		t.Fatalf("report_id = %v, want boot-1-1", got)
+	}
+	relay, ok := received["relay_traffic"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("relay_traffic missing or wrong type: %#v", received["relay_traffic"])
+	}
+	if _, ok := relay["7"]; !ok {
+		t.Fatalf("relay_traffic missing node 7: %#v", relay)
 	}
 }
 

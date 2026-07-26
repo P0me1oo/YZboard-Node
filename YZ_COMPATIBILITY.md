@@ -6,28 +6,28 @@
 
 | 项目 | 标识 |
 | --- | --- |
-| Node 发布版本 | `v1.13-yz.4` |
+| Node 发布版本 | `v1.13-yz.5` |
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.1` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | `9189e14486645a60db96e5188b82bb6916ef4b95` |
+| Node Release Tag 对应 commit | 发布后回填 |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
-| Node Release 构建 | 固定来源 `v1.13-yz.4`；GitHub Actions run `30202554538`（`workflow_dispatch` 传入 `release_tag`，构建前校验 checkout commit 与 Tag 一致） |
-| Node Docker 标签 | `latest`、`v1.13-yz.4`、`9189e14486645a60db96e5188b82bb6916ef4b95` |
-| Node Docker manifest | `sha256:ada906cdf21bdc20003af596e5b42b3c3e08eb33d782fb02ab1323f1c61963dd`（`linux/amd64`、`linux/arm64`） |
-| Node Docker OCI 标识 | revision `9189e14486645a60db96e5188b82bb6916ef4b95`；version `v1.13-yz.4` |
-| YZboard 兼容代码 commit | `c142d06be7b76bfd4579189674dbcf81e53756d9` |
+| Node Release 构建 | 发布后回填 |
+| Node Docker 标签 | 发布后回填 |
+| Node Docker manifest | 发布后回填 |
+| Node Docker OCI 标识 | 发布后回填 |
+| YZboard 兼容代码 commit | 发布后回填（面板版本 `1.1.0`） |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
 | Xray 上游 Tag commit | `50231eaff98ccc31b5cbd247a721c16e97fe5ec1` |
 | YZ-Xray-core fork 版本 | `v26.7.11-yz.1` |
 | YZ-Xray-core fork commit | `620bee93867095f73880056cdfb08bc54a15f69e` |
 | Node 中的 Xray replace | `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260724203739-620bee938670` |
-| YZboard 兼容标识 | `xray-v26.7.11-yz.1`（面板版本 `1.0.6`） |
+| YZboard 兼容标识 | `xray-v26.7.11-yz.1`（面板版本 `1.1.0`） |
 | sing-box `require` 版本 | `v1.13.2` |
 | sing-box 实际 replacement | `github.com/cedar2025/sing-box v1.14.0-alpha.2.0.20260316103356-2e665cb7e295` |
 
-Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.4` 增加 `kernel.reality_min_client_ver`，为 Xray REALITY 入站显式注入 `minClientVer`，默认 `0.0.0`，不改变 Xray fork 基线和面板接口。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
+Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.5` 支持面板下发的 `relay` 段，实现单入口多落地中转，不改变 Xray fork 基线。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
 
 先前的 `v0.1.0-yz.1` Tag 保留用于审计，但其版本低于上游 `v1.13`，不作为部署或升级目标，也不创建对应 Release。
 
@@ -40,13 +40,15 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 - Xray REALITY 入站的 `realitySettings.minClientVer` 由 Node 显式写入，默认 `0.0.0`，可通过 `kernel.reality_min_client_ver` 覆盖。缺省该字段时 v26.7.11 会使用内置下限 `26.3.27`，低于该版本的客户端握手会被拒绝。
 - v26.7.11 已移除未加密 Shadowsocks。历史配置中的 `none`/`plain` 会显式返回错误，不会静默转换成其他加密算法。
 - `go.mod` 的 Xray `require` 版本只用于保持模块路径兼容；实际代码由 `replace` 固定到上表中的 fork pseudo-version。提交前应使用 `go list -m -json github.com/xtls/xray-core` 复核替换路径和版本。
+- 中转拓扑依赖 Xray 的 VLESS 路由值能力：认证前清零 UUID 第 7、8 字节，认证后按原始字节还原，并由路由规则的 `vlessRoute` 匹配。该能力来自上游 `v26.7.11`，sing-box 不具备，因此入口和落地节点都要求 xray 内核。
+- 面板 `relay` 段与 `relay_traffic` 上报字段属于 YZboard `1.1.0` 起的接口；旧面板不下发该字段时 Node 行为不变。
 
 ## 构建与版本检查
 
 发布构建示例：
 
 ```bash
-VERSION=v1.13-yz.4 make build-linux
+VERSION=v1.13-yz.5 make build-linux
 ```
 
 两个二进制的 `-v`/`version` 输出都包含：
@@ -55,7 +57,9 @@ VERSION=v1.13-yz.4 make build-linux
 - Xray 上游 Tag/commit、YZ fork 版本/commit，以及实际模块替换版本；
 - sing-box 请求版本和实际 replacement 版本。
 
-`v1.13-yz.4` Release 资产校验值：
+`v1.13-yz.5` 尚未构建和发布，Release 资产校验值发布后回填。
+
+`v1.13-yz.4` 历史 Release 资产校验值：
 
 | 资产 | SHA-256 |
 | --- | --- |
@@ -91,8 +95,8 @@ VERSION=v1.13-yz.4 make build-linux
 ```bash
 go list -m -json github.com/xtls/xray-core
 go test -v -race -count=1 ./...
-go build -ldflags "-X main.version=v1.13-yz.4" ./cmd/xboard-node
-go build -ldflags "-X main.version=v1.13-yz.4" ./cmd/xbctl
+go build -ldflags "-X main.version=v1.13-yz.5" ./cmd/xboard-node
+go build -ldflags "-X main.version=v1.13-yz.5" ./cmd/xbctl
 ```
 
 安装器和升级器从同一 Node Release 下载 `xboard-node` 和 `xbctl`，并使用该 Release 的 `SHA256SUMS` 校验。面板通过 `releases/latest/download/install.sh` 获取最新正式安装器，安装器再通过 `latest` 解析同一正式 Release；需要回滚时必须传入明确的旧 Node Tag。`.github/workflows/ci.yml` 已配置 `v*` Tag 推送触发，但截至 `v1.13-yz.4`，推送 Tag 实际未产生任何 workflow run（GitHub 侧未创建记录），`yz.2`、`yz.3`、`yz.4` 均通过 `workflow_dispatch` 传入 `release_tag` 发布。发布来源仍然固定：workflow 会 checkout 该 Tag 并校验 commit 一致后才继续构建。根因待查，暂按手动触发执行。在 Release 记录和六个资产出现前不能把 Tag 视为已发布。Xray fork 的回滚边界由 Node `go.mod` 中记录的 pseudo-version 和对应 fork commit 确定。

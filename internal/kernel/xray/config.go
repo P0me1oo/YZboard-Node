@@ -35,6 +35,14 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 		outbounds = append(outbounds, M(co))
 	}
 
+	// Internal transit outbounds, one per logical node behind this entry.
+	for _, ro := range buildRelayOutbounds(nc) {
+		if tag, _ := ro["tag"].(string); tag != "" {
+			tags[strings.ToLower(tag)] = true
+		}
+		outbounds = append(outbounds, ro)
+	}
+
 	// Add default outbounds only if not already defined (Issue #1: Panel priority)
 	if !tags["direct"] {
 		outbounds = append([]M{{"protocol": "freedom", "tag": "direct"}}, outbounds...)
@@ -78,7 +86,7 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	}
 
 	// Merge panel routes and static config routes
-	cfg["routing"] = buildRouting(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute))
+	cfg["routing"] = buildRouting(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute), buildRelayRoutingRules(nc))
 
 	mergeCustomXray(cfg, kcfg)
 	return cfg
@@ -198,6 +206,11 @@ func xrayLogLevel(singboxLevel string) string {
 }
 
 func buildInbound(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+	// A landing node only serves the internal transit inbound; panel users never reach it.
+	if nc.IsRelayLanding() {
+		return buildRelayLandingInbound(nc)
+	}
+
 	listenAddr := "::"
 	if nc.ListenIP != "" {
 		listenAddr = nc.ListenIP
@@ -653,7 +666,13 @@ func buildRealitySettings(kcfg config.KernelConfig, nc *model.NodeSpec) M {
 	return reality
 }
 
-func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteRule, customRules []map[string]any) M {
+// buildRouting assembles the rule list in priority order:
+//  1. structured custom route rules (explicit panel overrides)
+//  2. raw custom routes (native escape hatch)
+//  3. built-in private/loopback blocklist
+//  4. relay rules — a logical node's exit must not be overridden by generic panel routes
+//  5. panel routes
+func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteRule, customRules []map[string]any, relayRules []M) M {
 	var xrayRules []M
 
 	// Structured custom routes now take the highest priority for panel-managed overrides.
@@ -686,6 +705,8 @@ func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteR
 		},
 		"outboundTag": "block",
 	})
+
+	xrayRules = append(xrayRules, relayRules...)
 
 	for _, rule := range rules {
 		xrayRules = append(xrayRules, compilePanelRouteRule(rule)...)

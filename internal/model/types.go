@@ -1,6 +1,9 @@
 package model
 
-import "github.com/cedar2025/xboard-node/internal/config"
+import (
+	"github.com/cedar2025/xboard-node/internal/config"
+	"github.com/cedar2025/xboard-node/internal/panel"
+)
 
 type NodeSpec struct {
 	Protocol        string
@@ -45,6 +48,88 @@ type NodeSpec struct {
 
 	Multiplex           *MultiplexConfig
 	AcceptProxyProtocol bool
+
+	Relay *RelayConfig
+}
+
+const (
+	relayModeEntry   = panel.RelayModeEntry
+	relayModeLanding = panel.RelayModeLanding
+)
+
+// RelayConfig mirrors panel.RelayConfig in kernel-agnostic form.
+type RelayConfig struct {
+	Mode string
+
+	// Entry-side.
+	RouteID  int
+	Children []RelayChild
+
+	// Landing-side.
+	Protocol    string
+	ListenPort  int
+	Cipher      string
+	Password    string
+	EntryNodeID int
+}
+
+type RelayChild struct {
+	NodeID   int
+	Tag      string
+	RouteID  int
+	Protocol string
+	Address  string
+	Port     int
+	Cipher   string
+	Password string
+}
+
+func (r *RelayConfig) IsEntry() bool {
+	return r != nil && r.Mode == panel.RelayModeEntry
+}
+
+func (r *RelayConfig) IsLanding() bool {
+	return r != nil && r.Mode == panel.RelayModeLanding
+}
+
+// IsRelayEntry reports whether this node hosts internal outbounds for logical nodes.
+func (n *NodeSpec) IsRelayEntry() bool {
+	return n != nil && n.Relay.IsEntry()
+}
+
+// IsRelayLanding reports whether this node only serves the internal transit inbound.
+// Such a node has no panel users, so the kernel must stay up with an empty user set.
+func (n *NodeSpec) IsRelayLanding() bool {
+	return n != nil && n.Relay.IsLanding()
+}
+
+// RelayOutboundTags returns the internal outbound tags in a stable order.
+func (n *NodeSpec) RelayOutboundTags() []string {
+	if !n.IsRelayEntry() {
+		return nil
+	}
+	tags := make([]string, 0, len(n.Relay.Children))
+	for _, child := range n.Relay.Children {
+		if child.Tag != "" {
+			tags = append(tags, child.Tag)
+		}
+	}
+	return tags
+}
+
+// RelayNodeIDByTag maps internal outbound tags back to logical node IDs so the
+// entry can report per-landing traffic without re-deriving the tag format.
+func (n *NodeSpec) RelayNodeIDByTag() map[string]int {
+	if !n.IsRelayEntry() {
+		return nil
+	}
+	out := make(map[string]int, len(n.Relay.Children))
+	for _, child := range n.Relay.Children {
+		if child.Tag != "" && child.NodeID > 0 {
+			out[child.Tag] = child.NodeID
+		}
+	}
+	return out
 }
 
 type OutboundConfig struct {

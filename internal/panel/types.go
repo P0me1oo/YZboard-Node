@@ -143,6 +143,55 @@ type NodeConfig struct {
 
 	// Proxy Protocol (supports both top-level and networkSettings for compatibility)
 	AcceptProxyProtocol bool `json:"accept_proxy_protocol,omitempty"`
+
+	// Relay describes the transit topology (Xboard extension). Nil for plain nodes.
+	Relay *RelayConfig `json:"relay,omitempty"`
+}
+
+// Relay modes.
+const (
+	// RelayModeEntry marks the node clients actually connect to. It keeps its own
+	// client inbound and gains one internal outbound per logical node.
+	RelayModeEntry = "entry"
+	// RelayModeLanding marks a landing node. It only serves the internal inbound
+	// used by the entry server and never receives panel users.
+	RelayModeLanding = "landing"
+)
+
+// RelayConfig carries the transit topology for a node.
+type RelayConfig struct {
+	Mode string `json:"mode"`
+
+	// Entry-side fields.
+	RouteID  int          `json:"route_id,omitempty"`
+	Children []RelayChild `json:"children,omitempty"`
+
+	// Landing-side fields.
+	Protocol    string `json:"protocol,omitempty"`
+	ListenPort  int    `json:"listen_port,omitempty"`
+	Cipher      string `json:"cipher,omitempty"`
+	Password    string `json:"password,omitempty"`
+	EntryNodeID int    `json:"entry_node_id,omitempty"`
+}
+
+// RelayChild is one logical node reachable through an internal outbound on the entry.
+type RelayChild struct {
+	NodeID   int    `json:"node_id"`
+	Tag      string `json:"tag"`
+	RouteID  int    `json:"route_id"`
+	Protocol string `json:"protocol"`
+	Address  string `json:"address"`
+	Port     int    `json:"port"`
+	Cipher   string `json:"cipher"`
+	Password string `json:"password"`
+}
+
+func (r *RelayConfig) IsEntry() bool {
+	return r != nil && r.Mode == RelayModeEntry
+}
+
+func (r *RelayConfig) IsLanding() bool {
+	return r != nil && r.Mode == RelayModeLanding
 }
 
 // GetProxyProtocol returns true if AcceptProxyProtocol is set either at node level

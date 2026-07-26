@@ -68,6 +68,7 @@ type Xray struct {
 	inboundTag      string
 	lastKernelHash  string
 	cumTraffic      map[int][2]int64
+	cumRelayTraffic map[int][2]int64
 	speedLimitFunc  func(string) *rate.Limiter
 
 	// running is set after a successful Start and cleared before shutdown.
@@ -77,8 +78,9 @@ type Xray struct {
 
 func New(cfg config.KernelConfig) *Xray {
 	return &Xray{
-		cfg:        cfg,
-		cumTraffic: make(map[int][2]int64),
+		cfg:             cfg,
+		cumTraffic:      make(map[int][2]int64),
+		cumRelayTraffic: make(map[int][2]int64),
 	}
 }
 
@@ -156,6 +158,7 @@ func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ker
 	x.protocol = nodeConfig.Protocol
 	x.inboundTag = nodeConfig.Protocol + "-in"
 	x.cumTraffic = make(map[int][2]int64)
+	x.cumRelayTraffic = make(map[int][2]int64)
 	x.lastKernelHash = kernel.ComputeHash(nodeConfig, users)
 	x.running.Store(true)
 	x.mu.Unlock()
@@ -387,7 +390,9 @@ func (x *Xray) RemoveUsers(users []model.UserSpec) (int, error) {
 		return 0, nil
 	}
 
-	if len(kept) == 0 {
+	// A landing node has no panel users at all; its internal transit inbound must
+	// keep listening even when the user set drains to empty.
+	if len(kept) == 0 && !x.nodeConfig.IsRelayLanding() {
 		x.mu.Unlock()
 		x.Stop()
 		return removed, nil
