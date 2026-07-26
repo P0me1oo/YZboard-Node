@@ -208,6 +208,7 @@ func printUsage() {
   xbctl instance get <id> [--output text|json]
   xbctl config init --mode node|machine --panel-url URL --token TOKEN [flags]
   xbctl config health-port [--config PATH]
+  xbctl config kernel <xray|singbox> [--instance ID] [--config PATH] [--force]
   xbctl service status|start|stop|restart|enable|disable|logs
   xbctl health
   xbctl bind add-node --panel-url URL --token TOKEN --node-id ID [--node-type TYPE] [--kernel singbox|xray]
@@ -1262,18 +1263,171 @@ func machineIDPtr(cfg *config.Config) *int {
 
 func runConfig(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: xbctl config <init|health-port|refresh-meta>")
+		return errors.New("usage: xbctl config <init|health-port|kernel|refresh-meta>")
 	}
 	switch args[0] {
 	case "init":
 		return runConfigInit(args[1:])
 	case "health-port":
 		return runConfigHealthPort(args[1:])
+	case "kernel":
+		return runConfigKernel(args[1:])
 	case "refresh-meta":
 		return runConfigRefreshMeta(args[1:])
 	default:
 		return fmt.Errorf("unknown config command: %s", args[0])
 	}
+}
+
+// xrayUnsupportedInbounds lists inbound protocols that only sing-box can serve.
+// Switching such a node to xray leaves it without an inbound, so the switch is
+// refused unless the caller passes --force.
+var xrayUnsupportedInbounds = map[string]bool{
+	"tuic":   true,
+	"naive":  true,
+	"anytls": true,
+	"mieru":  true,
+	"socks":  true,
+	"http":   true,
+}
+
+// readInstanceIDs returns the instance ids in file order. config.Config skips
+// the id field when unmarshalling, so it has to be read separately.
+func readInstanceIDs(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var parsed struct {
+		Instances []struct {
+			ID string `yaml:"id"`
+		} `yaml:"instances"`
+	}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(parsed.Instances))
+	for _, inst := range parsed.Instances {
+		ids = append(ids, inst.ID)
+	}
+	return ids
+}
+
+// runConfigKernel switches instances between the xray and sing-box kernels.
+//
+// Without --instance every instance is updated; the command reports what it
+// changed and leaves restarting the service to the caller.
+func runConfigKernel(args []string) error {
+	cfgPath := defaultConfigPath
+	target := ""
+	instanceID := ""
+	force := false
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--config":
+			if i+1 >= len(args) {
+				return errors.New("--config requires a path")
+			}
+			i++
+			cfgPath = args[i]
+		case "--instance":
+			if i+1 >= len(args) {
+				return errors.New("--instance requires an instance id")
+			}
+			i++
+			instanceID = args[i]
+		case "--force":
+			force = true
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				return fmt.Errorf("unknown flag: %s", args[i])
+			}
+			if target != "" {
+				return errors.New("kernel type given more than once")
+			}
+			target = args[i]
+		}
+	}
+
+	switch strings.ToLower(strings.TrimSpace(target)) {
+	case "xray":
+		target = "xray"
+	case "singbox", "sing-box":
+		target = "singbox"
+	case "":
+		return errors.New("usage: xbctl config kernel <xray|singbox> [--instance ID] [--config PATH] [--force]")
+	default:
+		return fmt.Errorf("kernel must be xray or singbox, got %q", target)
+	}
+
+	root, err := loadWritableRootConfig(cfgPath)
+	if err != nil {
+		return err
+	}
+	instances := normalizeRootInstances(root)
+	if len(instances) == 0 {
+		return fmt.Errorf("no instance found in %s", cfgPath)
+	}
+
+	// InstanceID is yaml:"-", so it is empty after loading. Recover the ids the
+	// file actually carries; otherwise --instance never matches and writing back
+	// would rename or drop them. Only fall back to the derived id when the file
+	// has none.
+	fileIDs := readInstanceIDs(cfgPath)
+	for i := range instances {
+		if i < len(fileIDs) && fileIDs[i] != "" {
+			instances[i].InstanceID = fileIDs[i]
+			continue
+		}
+		if autoID, idErr := instances[i].AutoInstanceID(); idErr == nil {
+			instances[i].InstanceID = autoID
+		}
+	}
+
+	matched := 0
+	changed := 0
+	for i := range instances {
+		if instanceID != "" && instances[i].InstanceID != instanceID {
+			continue
+		}
+		matched++
+
+		nodeType := strings.ToLower(strings.TrimSpace(instances[i].Panel.NodeType))
+		if target == "xray" && nodeType != "" && xrayUnsupportedInbounds[nodeType] && !force {
+			return fmt.Errorf(
+				"instance %s serves %q, which the xray kernel cannot host; pass --force to switch anyway",
+				instances[i].InstanceID, nodeType,
+			)
+		}
+
+		from := instances[i].Kernel.Type
+		if from == "" {
+			from = "singbox"
+		}
+		if from == target {
+			fmt.Printf("%s: already %s\n", instances[i].InstanceID, target)
+			continue
+		}
+		instances[i].Kernel.Type = target
+		changed++
+		fmt.Printf("%s: %s -> %s\n", instances[i].InstanceID, from, target)
+	}
+
+	if matched == 0 {
+		return fmt.Errorf("instance %q not found in %s", instanceID, cfgPath)
+	}
+	if changed == 0 {
+		return nil
+	}
+
+	root.Instances = instances
+	if err := writeRootConfig(cfgPath, root); err != nil {
+		return err
+	}
+	fmt.Printf("updated %d instance(s) in %s\n", changed, cfgPath)
+	fmt.Println("restart the service to apply: systemctl restart xboard-node")
+	return nil
 }
 
 func runConfigRefreshMeta(args []string) error {

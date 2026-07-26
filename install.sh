@@ -21,7 +21,7 @@ CLI_PATH="/usr/local/bin/xbctl"
 INSTALLER_COPY_PATH="${INSTALL_ROOT}/install.sh"
 CLI_BINARY_SOURCE=""
 DEFAULT_HEALTH_PORT=65530
-DEFAULT_KERNEL="singbox"
+DEFAULT_KERNEL="xray"
 DEFAULT_MODE="node"
 DEFAULT_ACTION="install"
 DEFAULT_RELEASE_VERSION="latest"
@@ -37,6 +37,7 @@ NODE_ID=""
 NODE_TYPE=""
 MACHINE_ID=""
 KERNEL_TYPE="${DEFAULT_KERNEL}"
+KERNEL_EXPLICIT=0
 RELEASE_VERSION="${DEFAULT_RELEASE_VERSION}"
 HEALTH_PORT="${DEFAULT_HEALTH_PORT}"
 HEALTH_ENABLED=1
@@ -185,7 +186,7 @@ usage() {
 
   OPTIONAL:
     --node-type, -T     Explicit node type for node mode
-    --kernel, -k        singbox or xray (default: singbox)
+    --kernel, -k        xray or singbox (default: xray)
     --version           Release version or latest (default: latest)
     --binary            Use a local xboard-node binary path instead of downloading
     --xbctl-binary      Use a local xbctl binary path instead of downloading
@@ -239,6 +240,7 @@ parse_args() {
                 ;;
             --kernel|-k)
                 KERNEL_TYPE="$2"
+                KERNEL_EXPLICIT=1
                 shift 2
                 ;;
             --version)
@@ -297,6 +299,18 @@ parse_args() {
         xray|Xray|XRAY) KERNEL_TYPE="xray" ;;
         *) ;;
     esac
+
+    # 默认内核为 xray，但 xray 的入站协议少于 sing-box。未显式指定内核时，
+    # 若节点协议 xray 不支持，则回退到 sing-box，避免装完直接起不来。
+    if [ "$KERNEL_EXPLICIT" -eq 0 ] && [ "$KERNEL_TYPE" = "xray" ] && [ -n "$NODE_TYPE" ]; then
+        case "$(printf '%s' "$NODE_TYPE" | tr '[:upper:]' '[:lower:]')" in
+            tuic|naive|anytls|mieru|socks|http)
+                log_warn "Node type '${NODE_TYPE}' is not supported by the xray kernel; falling back to singbox."
+                log_warn "Pass --kernel xray explicitly to override this fallback."
+                KERNEL_TYPE="singbox"
+                ;;
+        esac
+    fi
 
     # Auto-detect mode from arguments when --mode is not specified.
     if [ -z "$MODE" ]; then
@@ -580,7 +594,7 @@ render_config() {
         config init
         --mode "$MODE"
         --panel-url "$PANEL_URL"
-        --kernel "${KERNEL_TYPE:-singbox}"
+        --kernel "${KERNEL_TYPE:-xray}"
         --health-port "${HEALTH_PORT:-0}"
         --token "$TOKEN"
         --version "$RELEASE_VERSION"

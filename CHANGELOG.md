@@ -1,5 +1,11 @@
 # 变更记录
 
+## v1.13-yz.6 - 2026-07-27
+
+- 安装器默认内核由 `singbox` 改为 `xray`，一键安装命令不再需要显式传 `--kernel xray`；用新安装器覆盖旧安装时，该实例的内核会一并切换到 xray。
+- 未显式指定 `--kernel` 且 `--node-type` 属于 xray 无法承载的入站协议（`tuic`、`naive`、`anytls`、`mieru`、`socks`、`http`）时，安装器回退到 sing-box 并给出提示，避免装完节点直接起不来。显式传 `--kernel xray` 可覆盖该回退。
+- 新增 `xbctl config kernel <xray|singbox>`，用于切换已安装节点的内核。默认作用于全部实例，`--instance` 可只改一个；切到 xray 时会拒绝 xray 无法承载的入站协议，`--force` 可强制执行；重复执行保持幂等，并保留配置文件中原有的实例 ID。
+
 ## v1.13-yz.5 - 2026-07-26
 
 - 支持面板下发的 `relay` 段，实现“单入口、多逻辑节点、多落地出口”的中转拓扑。

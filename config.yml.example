@@ -9,7 +9,7 @@
 
 # ── Multiple instances ──
 # kernel:
-#   type: "singbox"
+#   type: "xray"      # 安装器默认写入 xray；留空时代码回退为 singbox
 # log:
 #   level: "info"
 # instances:

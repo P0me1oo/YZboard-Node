@@ -16,6 +16,18 @@ UUID 的路由编号。Node 不需要额外的本地配置，全部参数由面�
 该机制由 Xray 提供，因此中转拓扑的两端都必须使用 xray 内核，sing-box 会在配置
 校验阶段直接报错。
 
+安装器默认写入 xray；已经装好的节点可以用下面的命令切换，改完重启服务生效：
+
+```bash
+xbctl config kernel xray            # 全部实例
+xbctl config kernel xray --instance <实例 ID>
+xbctl config kernel singbox         # 换回去
+systemctl restart xboard-node
+```
+
+xray 能承载的入站协议少于 sing-box（不支持 tuic、naive、anytls、mieru、socks、http），
+因此切到 xray 时命令会拒绝这些协议的实例，确认要切再加 `--force`。
+
 ## 入口节点
 
 面板下发：
