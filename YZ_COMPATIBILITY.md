@@ -10,9 +10,9 @@
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.1` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | 发布后回填 |
+| Node Release Tag 对应 commit | `944b2f4ca900f16cbc7e6a0c35f74426042f0c52` |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
-| Node Release 构建 | 发布后回填 |
+| Node Release 构建 | 固定来源 `v1.13-yz.7`；GitHub Actions run `30220291972`（`workflow_dispatch` 传入 `release_tag`，构建前校验 checkout commit 与 Tag 一致） |
 | Node Docker 标签 | 发布后回填 |
 | Node Docker manifest | 发布后回填 |
 | Node Docker OCI 标识 | 发布后回填 |
@@ -60,7 +60,16 @@ VERSION=v1.13-yz.7 make build-linux
 - Xray 上游 Tag/commit、YZ fork 版本/commit，以及实际模块替换版本；
 - sing-box 请求版本和实际 replacement 版本。
 
-`v1.13-yz.7` 尚未构建和发布，Release 资产校验值发布后回填。
+`v1.13-yz.7` Release 资产校验值：
+
+| 资产 | SHA-256 |
+| --- | --- |
+| `xboard-node-linux-amd64` | `df82755f05292e989a47fa6b7047586f2ae96c00dec8275c13b45e404f3a1a63` |
+| `xboard-node-linux-arm64` | `b40510fe856c6c998ccf0a904e59cbda5093550e21c7874c9d324eed80662822` |
+| `xbctl-linux-amd64` | `b127af9b59ed2ae5ee6401398158eb0d930f71f9642066dd18fa8eaa8eb05392` |
+| `xbctl-linux-arm64` | `b9509d4be3e84d700f17416c13ca23a33c0d0aaa443481673d96abf07bc0d911` |
+| `install.sh` | `d9e6df2cf7b1cd0441c1d2a74d55a2149ed2f25a18120c530fbb650f89bab431` |
+| `SHA256SUMS` | `cabf9ed0b3af7bd6e5a12f3bcaec67d493dd63329942c812ff302995ed144c23` |
 
 `v1.13-yz.6` 历史 Release 资产校验值：
 
