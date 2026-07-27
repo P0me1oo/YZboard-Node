@@ -32,3 +32,5 @@ internal/tracker/tracker_bench_test.go
 cmd/xboard-node-bench-compare
 cmd/xboard-node-bench
 .env
+# 工作区内部开发规则，不进入公开仓库和发布产物
+AGENTS.md
