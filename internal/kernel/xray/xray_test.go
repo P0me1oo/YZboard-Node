@@ -2,18 +2,149 @@ package xray
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
 
 	"github.com/cedar2025/xboard-node/internal/config"
+	"github.com/cedar2025/xboard-node/internal/kernel"
 	"github.com/cedar2025/xboard-node/internal/model"
 	appstats "github.com/xtls/xray-core/app/stats"
+	"github.com/xtls/xray-core/common/protocol"
 	xrayCore "github.com/xtls/xray-core/core"
 	featurebandwidth "github.com/xtls/xray-core/features/bandwidth"
 	xraystats "github.com/xtls/xray-core/features/stats"
 	"golang.org/x/time/rate"
 )
+
+type recordingUserManager struct {
+	users     map[string]*protocol.MemoryUser
+	calls     []string
+	addErr    error
+	removeErr error
+}
+
+func newRecordingUserManager(users ...*protocol.MemoryUser) *recordingUserManager {
+	manager := &recordingUserManager{users: make(map[string]*protocol.MemoryUser, len(users))}
+	for _, user := range users {
+		manager.users[user.Email] = user
+	}
+	return manager
+}
+
+func (m *recordingUserManager) AddUser(_ context.Context, user *protocol.MemoryUser) error {
+	m.calls = append(m.calls, "add:"+user.Email)
+	if m.addErr != nil {
+		return m.addErr
+	}
+	if _, exists := m.users[user.Email]; exists {
+		return fmt.Errorf("duplicate user %s", user.Email)
+	}
+	m.users[user.Email] = user
+	return nil
+}
+
+func (m *recordingUserManager) RemoveUser(_ context.Context, email string) error {
+	m.calls = append(m.calls, "remove:"+email)
+	if m.removeErr != nil {
+		return m.removeErr
+	}
+	if _, exists := m.users[email]; !exists {
+		return fmt.Errorf("unknown user %s", email)
+	}
+	delete(m.users, email)
+	return nil
+}
+
+func (m *recordingUserManager) GetUser(_ context.Context, email string) *protocol.MemoryUser {
+	return m.users[email]
+}
+
+func (m *recordingUserManager) GetUsers(_ context.Context) []*protocol.MemoryUser {
+	users := make([]*protocol.MemoryUser, 0, len(m.users))
+	for _, user := range m.users {
+		users = append(users, user)
+	}
+	return users
+}
+
+func (m *recordingUserManager) GetUsersCount(_ context.Context) int64 {
+	return int64(len(m.users))
+}
+
+func TestUserManagerUUIDReplacementRemovesBeforeAdd(t *testing.T) {
+	oldUser := model.UserSpec{ID: 15, UUID: "11111111-1111-4111-8111-111111111111"}
+	newUser := model.UserSpec{ID: 15, UUID: "22222222-2222-4222-8222-222222222222"}
+	manager := newRecordingUserManager(&protocol.MemoryUser{Email: userEmail(oldUser.ID)})
+
+	toAdd, toRemove := kernel.UserDiff([]model.UserSpec{oldUser}, []model.UserSpec{newUser})
+	removed, err := removeUsersFromManager(context.Background(), manager, toRemove)
+	if err != nil {
+		t.Fatalf("removeUsersFromManager() error = %v", err)
+	}
+	added, err := addUsersToManager(
+		context.Background(),
+		manager,
+		"vless",
+		&model.NodeSpec{Protocol: "vless"},
+		toAdd,
+	)
+	if err != nil {
+		t.Fatalf("addUsersToManager() error = %v", err)
+	}
+
+	if removed != 1 || added != 1 {
+		t.Fatalf("replacement counts = (+%d -%d), want (+1 -1)", added, removed)
+	}
+	wantCalls := []string{"remove:user@15", "add:user@15"}
+	if fmt.Sprint(manager.calls) != fmt.Sprint(wantCalls) {
+		t.Fatalf("manager calls = %v, want %v", manager.calls, wantCalls)
+	}
+	if manager.GetUsersCount(context.Background()) != 1 {
+		t.Fatalf("manager user count = %d, want 1", manager.GetUsersCount(context.Background()))
+	}
+}
+
+func TestUserManagerUpdateFailureIsReturned(t *testing.T) {
+	addErr := errors.New("add rejected")
+	manager := newRecordingUserManager()
+	manager.addErr = addErr
+
+	added, err := addUsersToManager(
+		context.Background(),
+		manager,
+		"vless",
+		&model.NodeSpec{Protocol: "vless"},
+		[]model.UserSpec{{ID: 15, UUID: "22222222-2222-4222-8222-222222222222"}},
+	)
+
+	if added != 0 {
+		t.Fatalf("added = %d, want 0", added)
+	}
+	if !errors.Is(err, addErr) {
+		t.Fatalf("addUsersToManager() error = %v, want wrapped %v", err, addErr)
+	}
+}
+
+func TestUserManagerRemovalFailureIsReturned(t *testing.T) {
+	removeErr := errors.New("remove rejected")
+	manager := newRecordingUserManager(&protocol.MemoryUser{Email: userEmail(15)})
+	manager.removeErr = removeErr
+
+	removed, err := removeUsersFromManager(
+		context.Background(),
+		manager,
+		[]model.UserSpec{{ID: 15, UUID: "11111111-1111-4111-8111-111111111111"}},
+	)
+
+	if removed != 0 {
+		t.Fatalf("removed = %d, want 0", removed)
+	}
+	if !errors.Is(err, removeErr) {
+		t.Fatalf("removeUsersFromManager() error = %v, want wrapped %v", err, removeErr)
+	}
+}
 
 func newStatsManager(t *testing.T) xraystats.Manager {
 	t.Helper()

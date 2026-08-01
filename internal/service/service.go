@@ -861,13 +861,9 @@ func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers 
 			return
 		}
 
-		for _, delta := range deltaUsers {
-			for _, old := range s.lastUsers {
-				if old.ID == delta.ID && old.UUID != delta.UUID {
-					s.kernel.RemoveUsers([]model.UserSpec{old})
-					break
-				}
-			}
+		if hasUUIDChange(s.lastUsers, deltaUsers) {
+			s.applyUserUpdate(ctx, merged, computeUserHash(merged))
+			return
 		}
 
 		prevUsers, prevHash := s.prepareUserState(merged)
@@ -875,8 +871,10 @@ func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers 
 		if err != nil {
 			nlog.Core().Warn(fmt.Sprintf("AddUsers failed: %v, falling back to UpdateUsers", err))
 			if _, _, err := s.kernel.UpdateUsers(merged); err != nil {
-				nlog.Core().Error(fmt.Sprintf("UpdateUsers fallback failed: %v", err))
-				s.restoreUserState(prevUsers, prevHash)
+				nlog.Core().Warn(fmt.Sprintf("UpdateUsers fallback failed, restarting kernel: %v", err))
+				if !s.startKernel(s.lastConfig, merged) {
+					s.restoreUserState(prevUsers, prevHash)
+				}
 				return
 			}
 		}
@@ -900,8 +898,10 @@ func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers 
 		if err != nil {
 			nlog.Core().Warn(fmt.Sprintf("RemoveUsers failed: %v, falling back to UpdateUsers", err))
 			if _, _, err := s.kernel.UpdateUsers(filtered); err != nil {
-				nlog.Core().Error(fmt.Sprintf("UpdateUsers fallback failed: %v", err))
-				s.restoreUserState(prevUsers, prevHash)
+				nlog.Core().Warn(fmt.Sprintf("UpdateUsers fallback failed, restarting kernel: %v", err))
+				if !s.startKernel(s.lastConfig, filtered) {
+					s.restoreUserState(prevUsers, prevHash)
+				}
 				return
 			}
 		}
@@ -912,6 +912,20 @@ func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers 
 	default:
 		nlog.Core().Warn(fmt.Sprintf("unknown user delta action: %s", action))
 	}
+}
+
+// hasUUIDChange 识别增量消息中需要完整替换而不是单纯追加的凭据变更。
+func hasUUIDChange(base, delta []model.UserSpec) bool {
+	current := make(map[int]string, len(base))
+	for _, user := range base {
+		current[user.ID] = user.UUID
+	}
+	for _, user := range delta {
+		if uuid, exists := current[user.ID]; exists && uuid != user.UUID {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeUsers overlays deltaUsers onto base (keyed by ID). New users are

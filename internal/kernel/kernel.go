@@ -127,9 +127,8 @@ func ComputeHash(nc *model.NodeSpec, users []model.UserSpec) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-// UserDiff computes which users to add and which to remove when transitioning
-// from oldUsers to newUsers. This is a pure helper used by callers; kernels
-// may also use it internally.
+// UserDiff 计算用户集替换时的新增项和删除项。
+// 同一 ID 的 UUID 变化属于凭据替换，必须同时删除旧凭据并添加新凭据。
 func UserDiff(oldUsers, newUsers []model.UserSpec) (toAdd, toRemove []model.UserSpec) {
 	oldMap := make(map[int]model.UserSpec, len(oldUsers))
 	for _, u := range oldUsers {
@@ -147,7 +146,8 @@ func UserDiff(oldUsers, newUsers []model.UserSpec) (toAdd, toRemove []model.User
 		}
 	}
 	for _, u := range oldUsers {
-		if _, exists := newMap[u.ID]; !exists {
+		updated, exists := newMap[u.ID]
+		if !exists || updated.UUID != u.UUID {
 			toRemove = append(toRemove, u)
 		}
 	}

@@ -25,6 +25,7 @@ type fakeKernel struct {
 	updateCalls int
 	addCalls    int
 	removeCalls int
+	startUsers  []model.UserSpec
 
 	onUpdateUsers func([]model.UserSpec)
 	onAddUsers    func([]model.UserSpec)
@@ -43,6 +44,7 @@ func (f *fakeKernel) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, t
 	if f.startErr != nil {
 		return f.startErr
 	}
+	f.startUsers = append([]model.UserSpec(nil), users...)
 	f.running = true
 	return nil
 }
@@ -198,6 +200,83 @@ func TestApplyUserDeltaAddPreparesLimiterBeforeKernelUpdate(t *testing.T) {
 	}
 }
 
+func TestApplyUserDeltaUUIDChangeUsesFullUpdate(t *testing.T) {
+	k := &fakeKernel{running: true}
+	s := newTestService(k)
+	s.lastConfig = &model.NodeSpec{Protocol: "vless"}
+	oldUsers := []model.UserSpec{{ID: 15, UUID: "uuid-old", SpeedLimit: 4}}
+	s.updateUserState(oldUsers)
+
+	delta := []model.UserSpec{{ID: 15, UUID: "uuid-new", SpeedLimit: 4}}
+	k.onUpdateUsers = func(users []model.UserSpec) {
+		if len(users) != 1 || users[0].ID != 15 || users[0].UUID != "uuid-new" {
+			t.Fatalf("unexpected users passed to UpdateUsers: %#v", users)
+		}
+	}
+
+	s.applyUserDelta(context.Background(), "add", delta)
+
+	if got := k.updateCalls; got != 1 {
+		t.Fatalf("UpdateUsers call count = %d, want 1", got)
+	}
+	if k.addCalls != 0 || k.removeCalls != 0 {
+		t.Fatalf("UUID replacement used incremental calls: add=%d remove=%d", k.addCalls, k.removeCalls)
+	}
+	if len(s.lastUsers) != 1 || s.lastUsers[0].UUID != "uuid-new" {
+		t.Fatalf("lastUsers = %#v, want rotated UUID", s.lastUsers)
+	}
+}
+
+func TestApplyUserDeltaUUIDChangeRestartsKernelWhenFullUpdateFails(t *testing.T) {
+	k := &fakeKernel{
+		running:   true,
+		updateErr: errors.New("update failed"),
+	}
+	s := newTestService(k)
+	s.lastConfig = &model.NodeSpec{Protocol: "vless"}
+	s.updateUserState([]model.UserSpec{{ID: 15, UUID: "uuid-old", SpeedLimit: 4}})
+
+	s.applyUserDelta(
+		context.Background(),
+		"add",
+		[]model.UserSpec{{ID: 15, UUID: "uuid-new", SpeedLimit: 4}},
+	)
+
+	if got := k.startCalls; got != 1 {
+		t.Fatalf("Start call count = %d, want 1", got)
+	}
+	if len(k.startUsers) != 1 || k.startUsers[0].UUID != "uuid-new" {
+		t.Fatalf("restart users = %#v, want rotated UUID", k.startUsers)
+	}
+	if len(s.lastUsers) != 1 || s.lastUsers[0].UUID != "uuid-new" {
+		t.Fatalf("lastUsers = %#v, want rotated UUID after successful restart", s.lastUsers)
+	}
+}
+
+func TestApplyUserDeltaRestartsKernelWhenAddAndFullUpdateFail(t *testing.T) {
+	k := &fakeKernel{
+		running:   true,
+		addErr:    errors.New("add failed"),
+		updateErr: errors.New("update failed"),
+	}
+	s := newTestService(k)
+	s.lastConfig = &model.NodeSpec{Protocol: "vless"}
+	oldUsers := []model.UserSpec{{ID: 1, UUID: "uuid-old", SpeedLimit: 4}}
+	s.updateUserState(oldUsers)
+
+	delta := []model.UserSpec{{ID: 2, UUID: "uuid-new", SpeedLimit: 8}}
+	s.applyUserDelta(context.Background(), "add", delta)
+
+	if got := k.startCalls; got != 1 {
+		t.Fatalf("Start call count = %d, want 1", got)
+	}
+	if len(k.startUsers) != 2 {
+		t.Fatalf("restart users = %#v, want complete merged user set", k.startUsers)
+	}
+	if len(s.lastUsers) != 2 || s.speedTracker.GetLimiter("uuid-new") == nil {
+		t.Fatalf("service state was not retained after successful restart: %#v", s.lastUsers)
+	}
+}
 
 func TestValidateNodeRuntimeRejectsUnsupportedDNSProvider(t *testing.T) {
 	cfg := &config.Config{Kernel: config.KernelConfig{Type: "singbox"}}

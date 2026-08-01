@@ -302,15 +302,25 @@ func (x *Xray) AddUsers(users []model.UserSpec) (int, error) {
 		userMap[u.ID] = u
 	}
 	var toAdd []model.UserSpec
+	credentialChanged := false
 	for _, u := range users {
-		if _, exists := userMap[u.ID]; !exists {
+		current, exists := userMap[u.ID]
+		if !exists {
 			toAdd = append(toAdd, u)
+		} else if current.UUID != u.UUID {
+			credentialChanged = true
 		}
 		userMap[u.ID] = u // always overwrite properties
 	}
 	merged := make([]model.UserSpec, 0, len(userMap))
 	for _, u := range userMap {
 		merged = append(merged, u)
+	}
+
+	if credentialChanged {
+		x.mu.Unlock()
+		added, _, err := x.UpdateUsers(merged)
+		return added, err
 	}
 
 	if len(toAdd) == 0 {
@@ -339,21 +349,12 @@ func (x *Xray) AddUsers(users []model.UserSpec) (int, error) {
 	x.mu.Unlock()
 
 	ctx := context.Background()
-	added := 0
-	for _, u := range toAdd {
-		mu, err := toMemoryUser(proto, nc, u)
-		if err != nil {
-			nlog.Core().Warn("xray: skip user, cannot build account", "user", u.ID, "error", err)
-			continue
-		}
-		if err := um.AddUser(ctx, mu); err != nil {
-			nlog.Core().Warn("xray: AddUser failed", "user", u.ID, "error", err)
-			continue
-		}
-		added++
+	added, err := addUsersToManager(ctx, um, proto, nc, toAdd)
+	if err != nil {
+		return added, err
 	}
 
-	// Update bookkeeping with full merged list (new users + updated properties).
+	// 只有运行时全部更新成功后才推进账面状态，避免后续同步被错误哈希跳过。
 	x.mu.Lock()
 	x.users = merged
 	x.mu.Unlock()
@@ -377,10 +378,12 @@ func (x *Xray) RemoveUsers(users []model.UserSpec) (int, error) {
 		removeSet[u.ID] = struct{}{}
 	}
 	var kept []model.UserSpec
+	var toRemove []model.UserSpec
 	removed := 0
 	for _, u := range x.users {
 		if _, rm := removeSet[u.ID]; rm {
 			removed++
+			toRemove = append(toRemove, u)
 		} else {
 			kept = append(kept, u)
 		}
@@ -411,16 +414,12 @@ func (x *Xray) RemoveUsers(users []model.UserSpec) (int, error) {
 	x.mu.Unlock()
 
 	ctx := context.Background()
-	actualRemoved := 0
-	for _, u := range users {
-		email := userEmail(u.ID)
-		if err := um.RemoveUser(ctx, email); err != nil {
-			nlog.Core().Debug("xray: RemoveUser skipped", "user", u.ID, "error", err)
-			continue
-		}
-		actualRemoved++
+	actualRemoved, err := removeUsersFromManager(ctx, um, toRemove)
+	if err != nil {
+		return actualRemoved, err
 	}
 
+	// 只有运行时全部更新成功后才推进账面状态，失败时由 Service 完整重建内核。
 	x.mu.Lock()
 	x.users = kept
 	x.mu.Unlock()
@@ -441,9 +440,8 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 		return 0, 0, fmt.Errorf("not running")
 	}
 	toAdd, toRemove := kernel.UserDiff(x.users, users)
-	added, removed = len(toAdd), len(toRemove)
 
-	if added == 0 && removed == 0 {
+	if len(toAdd) == 0 && len(toRemove) == 0 {
 		// Only limits changed — update dispatcher without restart.
 		x.users = users
 		x.mu.Unlock()
@@ -462,7 +460,7 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 		if err = x.Start(nc, users, t); err != nil {
 			return 0, 0, err
 		}
-		return
+		return len(toAdd), len(toRemove), nil
 	}
 
 	proto := x.protocol
@@ -472,23 +470,16 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 	ctx := context.Background()
 
 	// Remove first, then add (order matters for UUID changes on same ID)
-	for _, u := range toRemove {
-		email := userEmail(u.ID)
-		if err := um.RemoveUser(ctx, email); err != nil {
-			nlog.Core().Debug("xray: RemoveUser skipped in UpdateUsers", "user", u.ID, "error", err)
-		}
+	removed, err = removeUsersFromManager(ctx, um, toRemove)
+	if err != nil {
+		return 0, removed, err
 	}
-	for _, u := range toAdd {
-		mu, err := toMemoryUser(proto, nc, u)
-		if err != nil {
-			nlog.Core().Warn("xray: skip user in UpdateUsers", "user", u.ID, "error", err)
-			continue
-		}
-		if err := um.AddUser(ctx, mu); err != nil {
-			nlog.Core().Warn("xray: AddUser failed in UpdateUsers", "user", u.ID, "error", err)
-		}
+	added, err = addUsersToManager(ctx, um, proto, nc, toAdd)
+	if err != nil {
+		return added, removed, err
 	}
 
+	// 只有运行时完成删除和添加后才推进账面状态与限速映射。
 	x.mu.Lock()
 	x.users = users
 	x.mu.Unlock()
@@ -496,7 +487,43 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 	x.updateBandwidthLimits(users)
 
 	nlog.Core().Info("xray: users updated via UserManager", "added", added, "removed", removed, "total", len(users))
-	return
+	return added, removed, nil
+}
+
+func addUsersToManager(
+	ctx context.Context,
+	manager xrayProxy.UserManager,
+	protocolName string,
+	nodeConfig *model.NodeSpec,
+	users []model.UserSpec,
+) (int, error) {
+	added := 0
+	for _, user := range users {
+		memoryUser, err := toMemoryUser(protocolName, nodeConfig, user)
+		if err != nil {
+			return added, fmt.Errorf("build user %d account: %w", user.ID, err)
+		}
+		if err := manager.AddUser(ctx, memoryUser); err != nil {
+			return added, fmt.Errorf("add user %d: %w", user.ID, err)
+		}
+		added++
+	}
+	return added, nil
+}
+
+func removeUsersFromManager(
+	ctx context.Context,
+	manager xrayProxy.UserManager,
+	users []model.UserSpec,
+) (int, error) {
+	removed := 0
+	for _, user := range users {
+		if err := manager.RemoveUser(ctx, userEmail(user.ID)); err != nil {
+			return removed, fmt.Errorf("remove user %d: %w", user.ID, err)
+		}
+		removed++
+	}
+	return removed, nil
 }
 
 var _ kernel.Kernel = (*Xray)(nil)
