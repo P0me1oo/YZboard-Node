@@ -6,16 +6,16 @@
 
 | 项目 | 标识 |
 | --- | --- |
-| Node 发布版本 | `v1.13-yz.8`（待发布） |
+| Node 发布版本 | `v1.13-yz.8` |
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.1` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | 待发布时回填 |
+| Node Release Tag 对应 commit | `e198191de221ffaedc416ffb4306217fe3484a50` |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
-| Node Release 构建 | 待从 `v1.13-yz.8` Tag 固定构建；发布时回填 GitHub Actions run |
-| Node Docker 标签 | 发布后回填 |
-| Node Docker manifest | 发布后回填 |
-| Node Docker OCI 标识 | 发布后回填 |
+| Node Release 构建 | 固定来源 `v1.13-yz.8`；GitHub Actions run `30705492058`（`workflow_dispatch` 传入 `release_tag`，构建前校验 checkout commit 与 Tag 一致） |
+| Node Docker 标签 | `ghcr.io/p0me1oo/yzboard-node:e198191de221ffaedc416ffb4306217fe3484a50`、`ghcr.io/p0me1oo/yzboard-node:v1.13-yz.8`、`ghcr.io/p0me1oo/yzboard-node:latest` |
+| Node Docker manifest | `sha256:046d495a8b46874a12241b277c13111708d8f1a857e44e8a34e960e0c5f5dbf9`（`linux/amd64`、`linux/arm64`） |
+| Node Docker OCI 标识 | `org.opencontainers.image.revision=e198191de221ffaedc416ffb4306217fe3484a50`；`org.opencontainers.image.version=v1.13-yz.8` |
 | YZboard 兼容代码 commit | `90c11685eab03a68e167a3c0c969bd774a89e362`（面板版本 `1.2.1`） |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
@@ -61,7 +61,16 @@ VERSION=v1.13-yz.8 make build-linux
 - Xray 上游 Tag/commit、YZ fork 版本/commit，以及实际模块替换版本；
 - sing-box 请求版本和实际 replacement 版本。
 
-`v1.13-yz.8` Release 资产待发布；Tag 对应 commit、GitHub Actions run 和校验值需在发布完成后回填。
+`v1.13-yz.8` Release 资产校验值：
+
+| 资产 | SHA-256 |
+| --- | --- |
+| `xboard-node-linux-amd64` | `9fef57ea43c0fefc9df516863d6753d7435a4f28a33dc3e9eec0d6c5d5d091f0` |
+| `xboard-node-linux-arm64` | `65edb812c6893ca3953927f94635c0d865b57298a9f0405ed93563b26d94eed8` |
+| `xbctl-linux-amd64` | `a38964e43a5a6ad76d160f6de955fc9d641e3fef48821c92fa0f53decbe5f705` |
+| `xbctl-linux-arm64` | `7986dc8386bb82b49b359afbc5d6a99cf8b5631d6eda9a8531e9f757e16470f0` |
+| `install.sh` | `d9e6df2cf7b1cd0441c1d2a74d55a2149ed2f25a18120c530fbb650f89bab431` |
+| `SHA256SUMS` | `cd57fa28b929b5512f12cfba35e4eae01348c604ca170d13fd3c4deacddf0194` |
 
 `v1.13-yz.7` 历史 Release 资产校验值：
 
@@ -136,7 +145,7 @@ go build -ldflags "-X main.version=v1.13-yz.8" ./cmd/xboard-node
 go build -ldflags "-X main.version=v1.13-yz.8" ./cmd/xbctl
 ```
 
-安装器和升级器从同一 Node Release 下载 `xboard-node` 和 `xbctl`，并使用该 Release 的 `SHA256SUMS` 校验。面板通过 `releases/latest/download/install.sh` 获取最新正式安装器，安装器再通过 `latest` 解析同一正式 Release；需要回滚时必须传入明确的旧 Node Tag。`.github/workflows/ci.yml` 已配置 `v*` Tag 推送触发，但截至 `v1.13-yz.4`，推送 Tag 实际未产生任何 workflow run（GitHub 侧未创建记录），`yz.2`、`yz.3`、`yz.4` 均通过 `workflow_dispatch` 传入 `release_tag` 发布。发布来源仍然固定：workflow 会 checkout 该 Tag 并校验 commit 一致后才继续构建。根因待查，暂按手动触发执行。在 Release 记录和六个资产出现前不能把 Tag 视为已发布。Xray fork 的回滚边界由 Node `go.mod` 中记录的 pseudo-version 和对应 fork commit 确定。
+安装器和升级器从同一 Node Release 下载 `xboard-node` 和 `xbctl`，并使用该 Release 的 `SHA256SUMS` 校验。面板通过 `releases/latest/download/install.sh` 获取最新正式安装器，安装器再通过 `latest` 解析同一正式 Release；需要回滚时必须传入明确的旧 Node Tag。`.github/workflows/ci.yml` 已配置 `v*` Tag 推送触发，但截至 `v1.13-yz.8`，推送 Tag 仍未产生 workflow run；`yz.2` 至 `yz.8` 的正式发布都通过 `workflow_dispatch` 传入固定 `release_tag` 完成。workflow 会 checkout 该 Tag 并校验 commit 一致后才继续构建。根因待查，暂按手动触发执行。在 Release 记录和六个资产出现前不能把 Tag 视为已发布。Xray fork 的回滚边界由 Node `go.mod` 中记录的 pseudo-version 和对应 fork commit 确定。
 
 ## 后续上游同步
 
