@@ -604,8 +604,13 @@ func toMemoryUser(proto string, nc *model.NodeSpec, u model.UserSpec) (*protocol
 
 	case "shadowsocks":
 		if strings.HasPrefix(nc.Cipher, "2022-blake3-") {
-			// 2022-blake3 multi-user mode
-			mu.Account = &ss2022.MemoryAccount{Key: u.UUID}
+			// SS2022 的 UserManager 接收与静态 clients.password 相同的 Base64 用户密钥，
+			// 不能直接使用面板下发的原始 UUID。
+			method, ok := ss2022Methods[nc.Cipher]
+			if !ok {
+				return nil, fmt.Errorf("unsupported shadowsocks 2022 cipher %q", nc.Cipher)
+			}
+			mu.Account = &ss2022.MemoryAccount{Key: ss2022UserKey(u.UUID, method.size)}
 		} else {
 			// Traditional SS — build via getCipher path
 			ct := parseCipherType(nc.Cipher)

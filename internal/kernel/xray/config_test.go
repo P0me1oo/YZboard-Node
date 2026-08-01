@@ -406,7 +406,8 @@ func TestToMemoryUser_ExistingXrayProtocols(t *testing.T) {
 			},
 			check: func(t *testing.T, account any) {
 				got, ok := account.(*ss2022.MemoryAccount)
-				if !ok || got.Key != user.UUID {
+				want := base64.StdEncoding.EncodeToString([]byte(user.UUID[:16]))
+				if !ok || got.Key != want {
 					t.Fatalf("Shadowsocks 2022 account = %#v", account)
 				}
 			},
@@ -656,6 +657,40 @@ func TestBuildConfig_Shadowsocks_MultiUser(t *testing.T) {
 	clients := settings["clients"].([]interface{})
 	if len(clients) != 2 {
 		t.Fatalf("expected 2 clients, got %d", len(clients))
+	}
+	want := base64.StdEncoding.EncodeToString([]byte(testUsers[0].UUID[:16]))
+	if got := clients[0].(map[string]interface{})["password"]; got != want {
+		t.Fatalf("first SS2022 user password = %v, want %q", got, want)
+	}
+}
+
+func TestSS2022DynamicUserKeyMatchesStaticConfig(t *testing.T) {
+	user := model.UserSpec{ID: 15, UUID: "01234567-89ab-cdef-0123-456789abcdef"}
+	tests := []struct {
+		cipher string
+		size   int
+	}{
+		{cipher: "2022-blake3-aes-128-gcm", size: 16},
+		{cipher: "2022-blake3-aes-256-gcm", size: 32},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.cipher, func(t *testing.T) {
+			node := &model.NodeSpec{Protocol: "shadowsocks", Cipher: tc.cipher, ServerKey: "server-key"}
+			inbound := buildShadowsocks(M{}, node, []model.UserSpec{user})
+			settings := inbound["settings"].(M)
+			staticKey := settings["clients"].([]M)[0]["password"].(string)
+
+			memoryUser, err := toMemoryUser("shadowsocks", node, user)
+			if err != nil {
+				t.Fatalf("toMemoryUser() error = %v", err)
+			}
+			dynamicKey := memoryUser.Account.(*ss2022.MemoryAccount).Key
+			want := base64.StdEncoding.EncodeToString([]byte(user.UUID[:tc.size]))
+			if staticKey != want || dynamicKey != want {
+				t.Fatalf("SS2022 keys differ: static=%q dynamic=%q want=%q", staticKey, dynamicKey, want)
+			}
+		})
 	}
 }
 

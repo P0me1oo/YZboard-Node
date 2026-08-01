@@ -366,6 +366,18 @@ var ss2022Methods = map[string]ss2022Config{
 	"2022-blake3-chacha20-poly1305": {"2022-blake3-chacha20-poly1305", 32},
 }
 
+// ss2022UserKey 与面板生成订阅密码时的 uuidToBase64 规则保持一致：
+// 截取 UUID 文本的前 size 个字节，再使用标准 Base64 编码。
+// 完整配置和 UserManager 热更新必须复用同一转换，否则 UUID 轮换后
+// 动态加入的用户会得到与客户端订阅不同的 SS2022 密钥。
+func ss2022UserKey(uuid string, size int) string {
+	raw := []byte(uuid)
+	if len(raw) > size {
+		raw = raw[:size]
+	}
+	return base64.StdEncoding.EncodeToString(raw)
+}
+
 func buildShadowsocks(base M, nc *model.NodeSpec, users []model.UserSpec) M {
 	ss2022, isSS2022 := ss2022Methods[nc.Cipher]
 
@@ -374,15 +386,10 @@ func buildShadowsocks(base M, nc *model.NodeSpec, users []model.UserSpec) M {
 	if isSS2022 {
 		// SS2022: server key at top level, per-user key must be Base64 of fixed-length raw bytes.
 		// Only blake3-aes-* supports multi-user in Xray; chacha20 variant is single-user only.
-		rawBuf := make([]byte, ss2022.size)
 		for i := range users {
 			u := &users[i]
-			for j := range rawBuf {
-				rawBuf[j] = 0
-			}
-			copy(rawBuf, u.UUID)
 			clients = append(clients, M{
-				"password": base64.StdEncoding.EncodeToString(rawBuf),
+				"password": ss2022UserKey(u.UUID, ss2022.size),
 				"email":    userEmail(u.ID),
 			})
 		}
