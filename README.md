@@ -11,6 +11,7 @@ Node backend for [YZboard](https://github.com/P0me1oo/YZboard). Supports `sing-b
 - User controls: speed limit, device limit, alive-IP tracking, hot update
 - Deploy modes: node mode, machine mode, standalone mode
 - Multi-instance: single process binding multiple panels / nodes
+- Relay: VLESS entry with Shadowsocks or VLESS landings, including VLESS Encryption
 
 ## Install
 
@@ -74,6 +75,7 @@ Legacy single-panel config is fully compatible. Appending bindings auto-migrates
 ## Extensions
 
 - Xray REALITY 最低客户端版本: [docs-xray-reality.md](docs-xray-reality.md)
+- 中转节点与 VLESS 落地: [docs-relay.md](docs-relay.md)
 - Custom routes: [docs-custom-routes.md](docs-custom-routes.md)
 - Custom outbounds: [docs-custom-outbounds.md](docs-custom-outbounds.md)
 - DNS providers (ACME DNS-01): [docs-dns-providers.md](docs-dns-providers.md)

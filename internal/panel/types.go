@@ -167,23 +167,39 @@ type RelayConfig struct {
 	Children []RelayChild `json:"children,omitempty"`
 
 	// Landing-side fields.
-	Protocol    string `json:"protocol,omitempty"`
-	ListenPort  int    `json:"listen_port,omitempty"`
-	Cipher      string `json:"cipher,omitempty"`
-	Password    string `json:"password,omitempty"`
-	EntryNodeID int    `json:"entry_node_id,omitempty"`
+	Protocol    string            `json:"protocol,omitempty"`
+	ListenPort  int               `json:"listen_port,omitempty"`
+	Cipher      string            `json:"cipher,omitempty"`
+	Password    string            `json:"password,omitempty"`
+	EntryNodeID int               `json:"entry_node_id,omitempty"`
+	VLESS       *RelayVLESSConfig `json:"vless,omitempty"`
 }
 
 // RelayChild is one logical node reachable through an internal outbound on the entry.
 type RelayChild struct {
-	NodeID   int    `json:"node_id"`
-	Tag      string `json:"tag"`
-	RouteID  int    `json:"route_id"`
-	Protocol string `json:"protocol"`
-	Address  string `json:"address"`
-	Port     int    `json:"port"`
-	Cipher   string `json:"cipher"`
-	Password string `json:"password"`
+	NodeID   int               `json:"node_id"`
+	Tag      string            `json:"tag"`
+	RouteID  int               `json:"route_id"`
+	Protocol string            `json:"protocol"`
+	Address  string            `json:"address"`
+	Port     int               `json:"port"`
+	Cipher   string            `json:"cipher"`
+	Password string            `json:"password"`
+	VLESS    *RelayVLESSConfig `json:"vless,omitempty"`
+}
+
+// RelayVLESSConfig 保存内部链路身份，以及入口连接落地所需的客户端传输参数。
+// 服务端私密字段只保留在落地节点的顶层 NodeConfig，不会复制到入口 child。
+type RelayVLESSConfig struct {
+	ID              string                 `json:"id"`
+	Network         string                 `json:"network,omitempty"`
+	NetworkSettings map[string]interface{} `json:"network_settings,omitempty"`
+	TLS             int                    `json:"tls,omitempty"`
+	Flow            string                 `json:"flow,omitempty"`
+	Encryption      string                 `json:"encryption,omitempty"`
+	TLSSettings     map[string]interface{} `json:"tls_settings,omitempty"`
+	RealitySettings map[string]interface{} `json:"reality_settings,omitempty"`
+	TransportAuth   string                 `json:"transport_auth,omitempty"`
 }
 
 func (r *RelayConfig) IsEntry() bool {

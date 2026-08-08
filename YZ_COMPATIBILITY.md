@@ -2,10 +2,11 @@
 
 本文件记录可发布的 Node 构建与内嵌内核之间的固定关系。构建上线时必须使用明确的 Node Release Tag 和固定的 Xray fork commit，不能依赖 `main` 或其他移动分支。
 
-## 当前构建
+## 当前源码与已发布构建
 
 | 项目 | 标识 |
 | --- | --- |
+| Node 源码目标版本 | `v1.13-yz.10`（待发布） |
 | Node 发布版本 | `v1.13-yz.9` |
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.1` |
 | Node 上游发布基线 | `v1.13` |
@@ -16,7 +17,8 @@
 | Node Docker 标签 | `ghcr.io/p0me1oo/yzboard-node:v1.13-yz.9`、`ghcr.io/p0me1oo/yzboard-node:fead44ba92bb5a32d0a734628e82a04615e8b280`、`ghcr.io/p0me1oo/yzboard-node:latest` |
 | Node Docker manifest | OCI index `sha256:0bd9095aea1e561ff4139756f1dfdd5cab7469e1fab1d66c83cbba1555e120e9`；包含 `linux/amd64` 与 `linux/arm64` |
 | Node Docker OCI 标识 | 两个架构均为 revision `fead44ba92bb5a32d0a734628e82a04615e8b280`、version `v1.13-yz.9` |
-| YZboard 兼容代码 commit | `90c11685eab03a68e167a3c0c969bd774a89e362`（面板版本 `1.2.1`） |
+| YZboard 目标版本 | `1.4.0`（待发布；VLESS 落地需要与 `v1.13-yz.10` 成套使用） |
+| 最近已发布 YZboard 兼容代码 | `90c11685eab03a68e167a3c0c969bd774a89e362`（历史面板版本 `1.2.1`） |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
 | Xray 上游 Tag commit | `50231eaff98ccc31b5cbd247a721c16e97fe5ec1` |
@@ -27,7 +29,7 @@
 | sing-box `require` 版本 | `v1.13.2` |
 | sing-box 实际 replacement | `github.com/cedar2025/sing-box v1.14.0-alpha.2.0.20260316103356-2e665cb7e295` |
 
-Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.5` 支持面板下发的 `relay` 段实现单入口多落地中转，`yz.6` 把安装器默认内核改为 xray 并新增 `xbctl config kernel` 切换命令，`yz.7` 让自定义出站支持直连、拦截与源地址绑定，`yz.8` 修复用户 UUID 轮换后 Xray 节点未完整替换运行时凭据的问题，`yz.9` 让轮换后的 Shadowsocks 2022 动态用户密钥与面板订阅及静态配置使用相同编码。这些修订都不改变 Xray fork 基线。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
+Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.5` 支持首版 Shadowsocks 中转，`yz.6` 至 `yz.9` 延续既有安装、出站和用户同步修订，`yz.10` 新增 VLESS 落地、VLESS Encryption 和当前 Xray 传输矩阵。这些修订都不改变 Xray fork 基线。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
 
 先前的 `v0.1.0-yz.1` Tag 保留用于审计，但其版本低于上游 `v1.13`，不作为部署或升级目标，也不创建对应 Release。
 
@@ -47,13 +49,16 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 - 自定义出站从 `yz.7` 起接受 `direct`/`freedom` 与 `block`/`blackhole`，由 Node 翻译成目标内核的原生名；`settings.send_through` 在 xray 下提升为 outbound 级的 `sendThrough`。`settings` 内其余字段原样透传，需按目标内核的字段名填写，跨内核切换时要同步调整。
 - 从 `yz.8` 起，同一用户 ID 的 UUID 变化会被视为凭据替换，Xray `UserManager` 必须先删除旧凭据再添加新凭据；任一步失败都不得推进 Node 内部用户状态，并由 Service 尝试使用完整用户集重建内核。
 - 从 `yz.9` 起，Xray 的 Shadowsocks 2022 动态用户密钥按面板约定从 UUID 前 16 或 32 字节生成标准 Base64；静态启动配置和运行时增删用户必须得到同一密钥。
+- 从 `yz.10` 起，中转 child/landing 同时接受 Shadowsocks 和 VLESS。VLESS 的入口客户端参数放在 `relay.children[].vless`，落地内部身份放在 `relay.vless`；服务端顶层继续承载 `decryption`、Reality 私钥和证书配置。
+- VLESS relay 的传输矩阵固定为 RAW/TCP、WS、gRPC、XHTTP、HTTPUpgrade、mKCP、Hysteria；Reality 只允许 RAW/TCP、gRPC、XHTTP，Hysteria 必须使用 TLS，H2/HTTP 和 mKCP header/seed 会在启动前拒绝。
+- `yz.10` 继续使用当前 `go.mod` 固定的 YZ-Xray-core pseudo-version，不需要核心补丁。入口和落地 JSON 由该核心自带解析器覆盖验证。
 
 ## 构建与版本检查
 
 发布构建示例：
 
 ```bash
-VERSION=v1.13-yz.9 make build-linux
+VERSION=v1.13-yz.10 make build-linux
 ```
 
 两个二进制的 `-v`/`version` 输出都包含：
@@ -153,8 +158,8 @@ VERSION=v1.13-yz.9 make build-linux
 ```bash
 go list -m -json github.com/xtls/xray-core
 go test -v -race -count=1 ./...
-go build -ldflags "-X main.version=v1.13-yz.9" ./cmd/xboard-node
-go build -ldflags "-X main.version=v1.13-yz.9" ./cmd/xbctl
+go build -ldflags "-X main.version=v1.13-yz.10" ./cmd/xboard-node
+go build -ldflags "-X main.version=v1.13-yz.10" ./cmd/xbctl
 ```
 
 安装器和升级器从同一 Node Release 下载 `xboard-node` 和 `xbctl`，并使用该 Release 的 `SHA256SUMS` 校验。面板通过 `releases/latest/download/install.sh` 获取最新正式安装器，安装器再通过 `latest` 解析同一正式 Release；需要回滚时必须传入明确的旧 Node Tag。`.github/workflows/ci.yml` 已配置 `v*` Tag 推送触发，但截至 `v1.13-yz.9`，推送 Tag 仍未产生 workflow run；`yz.2` 至 `yz.9` 的正式发布都通过 `workflow_dispatch` 传入固定 `release_tag` 完成。workflow 会 checkout 该 Tag 并校验 commit 一致后才继续构建。根因待查，暂按手动触发执行。在 Release 记录和六个资产出现前不能把 Tag 视为已发布。Xray fork 的回滚边界由 Node `go.mod` 中记录的 pseudo-version 和对应 fork commit 确定。

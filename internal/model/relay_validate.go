@@ -1,6 +1,8 @@
 package model
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strings"
 )
@@ -57,6 +59,9 @@ func validateRelayEntry(n *NodeSpec, kernelType string, availableTags map[string
 	if !strings.EqualFold(n.Protocol, "vless") {
 		return fmt.Errorf("relay entry requires a vless inbound, got %q", n.Protocol)
 	}
+	if err := validateRelayEntryVLESS(n); err != nil {
+		return err
+	}
 	if err := validateRouteID(n.Relay.RouteID, "relay entry route_id"); err != nil {
 		return err
 	}
@@ -93,32 +98,60 @@ func validateRelayEntry(n *NodeSpec, kernelType string, availableTags map[string
 		}
 		seenRoutes[child.RouteID] = struct{}{}
 
-		if !strings.EqualFold(child.Protocol, "shadowsocks") {
-			return fmt.Errorf("relay child %d: unsupported transit protocol %q", child.NodeID, child.Protocol)
-		}
 		if strings.TrimSpace(child.Address) == "" {
 			return fmt.Errorf("relay child %d: address must not be empty", child.NodeID)
 		}
 		if child.Port <= 0 || child.Port > 65535 {
 			return fmt.Errorf("relay child %d: invalid port %d", child.NodeID, child.Port)
 		}
-		if !IsRelayTransitCipher(child.Cipher) {
-			return fmt.Errorf("relay child %d: unsupported cipher %q", child.NodeID, child.Cipher)
-		}
-		if strings.TrimSpace(child.Password) == "" {
-			return fmt.Errorf("relay child %d: password must not be empty", child.NodeID)
+
+		switch strings.ToLower(strings.TrimSpace(child.Protocol)) {
+		case "shadowsocks":
+			if !IsRelayTransitCipher(child.Cipher) {
+				return fmt.Errorf("relay child %d: unsupported cipher %q", child.NodeID, child.Cipher)
+			}
+			if strings.TrimSpace(child.Password) == "" {
+				return fmt.Errorf("relay child %d: password must not be empty", child.NodeID)
+			}
+		case "vless":
+			if err := validateRelayVLESS(child.VLESS, fmt.Sprintf("relay child %d", child.NodeID)); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("relay child %d: unsupported transit protocol %q", child.NodeID, child.Protocol)
 		}
 	}
 
 	return nil
 }
 
+func validateRelayEntryVLESS(n *NodeSpec) error {
+	network := n.Network
+	if strings.TrimSpace(network) == "" {
+		network = "tcp"
+	}
+	canonical, ok := NormalizeRelayVLESSNetwork(network)
+	if !ok {
+		return fmt.Errorf("relay entry: unsupported vless transport %q", n.Network)
+	}
+	if n.TLS < 0 || n.TLS > 2 {
+		return fmt.Errorf("relay entry: invalid vless tls mode %d", n.TLS)
+	}
+	if n.TLS == 2 && canonical != "tcp" && canonical != "xhttp" && canonical != "grpc" {
+		return fmt.Errorf("relay entry: reality only supports raw, xhttp and grpc")
+	}
+	if canonical == "hysteria" && n.TLS != 1 {
+		return fmt.Errorf("relay entry: hysteria transport requires tls")
+	}
+	if n.Flow != "" && n.Flow != "xtls-rprx-vision" {
+		return fmt.Errorf("relay entry: unsupported vless flow %q", n.Flow)
+	}
+	return nil
+}
+
 func validateRelayLanding(n *NodeSpec, kernelType string) error {
 	if kernelType != "xray" {
 		return fmt.Errorf("relay landing requires the xray kernel, got %s", kernelType)
-	}
-	if !strings.EqualFold(n.Relay.Protocol, "shadowsocks") {
-		return fmt.Errorf("relay landing: unsupported transit protocol %q", n.Relay.Protocol)
 	}
 	port := n.Relay.ListenPort
 	if port == 0 {
@@ -127,13 +160,209 @@ func validateRelayLanding(n *NodeSpec, kernelType string) error {
 	if port <= 0 || port > 65535 {
 		return fmt.Errorf("relay landing: invalid listen port %d", port)
 	}
-	if !IsRelayTransitCipher(n.Relay.Cipher) {
-		return fmt.Errorf("relay landing: unsupported cipher %q", n.Relay.Cipher)
-	}
-	if strings.TrimSpace(n.Relay.Password) == "" {
-		return fmt.Errorf("relay landing: password must not be empty")
+
+	switch strings.ToLower(strings.TrimSpace(n.Relay.Protocol)) {
+	case "shadowsocks":
+		if !IsRelayTransitCipher(n.Relay.Cipher) {
+			return fmt.Errorf("relay landing: unsupported cipher %q", n.Relay.Cipher)
+		}
+		if strings.TrimSpace(n.Relay.Password) == "" {
+			return fmt.Errorf("relay landing: password must not be empty")
+		}
+	case "vless":
+		landingVLESS := &RelayVLESSConfig{
+			ID:              "",
+			Network:         n.Network,
+			NetworkSettings: n.NetworkSettings,
+			TLS:             n.TLS,
+			Flow:            n.Flow,
+			Encryption:      "none",
+			TLSSettings:     n.TLSSettings,
+		}
+		if n.Relay.VLESS != nil {
+			landingVLESS.ID = n.Relay.VLESS.ID
+			landingVLESS.TransportAuth = n.Relay.VLESS.TransportAuth
+		}
+		if n.TLS == 2 {
+			// 服务端 Reality 参数位于 NodeSpec.TLSSettings；这里只验证组合，
+			// 公钥等客户端字段不会被要求出现在落地配置中。
+			landingVLESS.RealitySettings = map[string]any{
+				"server_name": "server-side",
+				"public_key":  "server-side",
+				"fingerprint": "chrome",
+			}
+		}
+		if err := validateRelayVLESS(landingVLESS, "relay landing"); err != nil {
+			return err
+		}
+		decryption := strings.TrimSpace(n.Decryption)
+		if decryption == "" {
+			decryption = "none"
+		}
+		if decryption != "none" && !validVLESSEncryption(decryption, true) {
+			return fmt.Errorf("relay landing: invalid vless decryption")
+		}
+	default:
+		return fmt.Errorf("relay landing: unsupported transit protocol %q", n.Relay.Protocol)
 	}
 	return nil
+}
+
+var relayVLESSNetworks = map[string]string{
+	"tcp": "tcp", "raw": "tcp",
+	"ws": "ws", "websocket": "ws",
+	"grpc":  "grpc",
+	"xhttp": "xhttp", "splithttp": "xhttp",
+	"httpupgrade": "httpupgrade",
+	"kcp":         "kcp", "mkcp": "kcp",
+	"hysteria": "hysteria",
+}
+
+// NormalizeRelayVLESSNetwork 返回中转构建器使用的标准传输名称。
+// 当前固定版本的 Xray Core 已移除 H2/HTTP，因此这里不提供兼容别名。
+func NormalizeRelayVLESSNetwork(network string) (string, bool) {
+	canonical, ok := relayVLESSNetworks[strings.ToLower(strings.TrimSpace(network))]
+	return canonical, ok
+}
+
+func validateRelayVLESS(v *RelayVLESSConfig, field string) error {
+	if v == nil {
+		return fmt.Errorf("%s: vless settings must not be empty", field)
+	}
+	if !validRelayUUID(v.ID) {
+		return fmt.Errorf("%s: invalid vless id", field)
+	}
+	networkName := v.Network
+	if strings.TrimSpace(networkName) == "" {
+		networkName = "tcp"
+	}
+	network, ok := NormalizeRelayVLESSNetwork(networkName)
+	if !ok {
+		return fmt.Errorf("%s: unsupported vless transport %q", field, v.Network)
+	}
+	if v.TLS < 0 || v.TLS > 2 {
+		return fmt.Errorf("%s: invalid vless tls mode %d", field, v.TLS)
+	}
+	if v.TLS == 2 && network != "tcp" && network != "xhttp" && network != "grpc" {
+		return fmt.Errorf("%s: reality only supports raw, xhttp and grpc", field)
+	}
+	if network == "hysteria" {
+		if v.TLS != 1 {
+			return fmt.Errorf("%s: hysteria transport requires tls", field)
+		}
+		if strings.TrimSpace(v.TransportAuth) == "" {
+			return fmt.Errorf("%s: hysteria transport auth must not be empty", field)
+		}
+	}
+	if v.Flow != "" && v.Flow != "xtls-rprx-vision" {
+		return fmt.Errorf("%s: unsupported vless flow %q", field, v.Flow)
+	}
+	encryption := strings.TrimSpace(v.Encryption)
+	if encryption == "" {
+		return fmt.Errorf("%s: vless encryption must be explicit", field)
+	}
+	if encryption != "none" && !validVLESSEncryption(encryption, false) {
+		return fmt.Errorf("%s: invalid vless encryption", field)
+	}
+	if v.TLS == 2 {
+		for _, key := range []string{"server_name", "public_key", "fingerprint"} {
+			if strings.TrimSpace(anyString(v.RealitySettings[key])) == "" {
+				return fmt.Errorf("%s: reality %s must not be empty", field, key)
+			}
+		}
+	}
+	if network == "kcp" {
+		if _, exists := v.NetworkSettings["header"]; exists {
+			return fmt.Errorf("%s: mkcp header was removed by the pinned xray core", field)
+		}
+		if _, exists := v.NetworkSettings["seed"]; exists {
+			return fmt.Errorf("%s: mkcp seed was removed by the pinned xray core", field)
+		}
+	}
+	return nil
+}
+
+func validRelayUUID(value string) bool {
+	raw := strings.ReplaceAll(strings.TrimSpace(value), "-", "")
+	if len(raw) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(raw)
+	return err == nil
+}
+
+func normalizeVLESSFlow(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, "none") {
+		return ""
+	}
+	return value
+}
+
+func validVLESSEncryption(value string, decryption bool) bool {
+	parts := strings.Split(strings.TrimSpace(value), ".")
+	if len(parts) < 4 || parts[0] != "mlkem768x25519plus" {
+		return false
+	}
+	switch parts[1] {
+	case "native", "xorpub", "random":
+	default:
+		return false
+	}
+	if decryption {
+		if !validVLESSSeconds(parts[2]) {
+			return false
+		}
+	} else if parts[2] != "0rtt" && parts[2] != "1rtt" {
+		return false
+	}
+
+	hasKey := false
+	for _, part := range parts[3:] {
+		// 长度不足 20 的段由 Xray 解释为可选 padding，其余段必须是密钥。
+		if len(part) < 20 {
+			continue
+		}
+		decoded, err := base64.RawURLEncoding.DecodeString(part)
+		if err != nil {
+			return false
+		}
+		if decryption {
+			if len(decoded) != 32 && len(decoded) != 64 {
+				return false
+			}
+		} else if len(decoded) != 32 && len(decoded) != 1184 {
+			return false
+		}
+		hasKey = true
+	}
+	return hasKey
+}
+
+func validVLESSSeconds(value string) bool {
+	if !strings.HasSuffix(value, "s") {
+		return false
+	}
+	parts := strings.Split(strings.TrimSuffix(value, "s"), "-")
+	if len(parts) < 1 || len(parts) > 2 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, char := range part {
+			if char < '0' || char > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func anyString(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 func validateRouteID(routeID int, field string) error {

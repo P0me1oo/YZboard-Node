@@ -245,7 +245,7 @@ func xrayLogLevel(singboxLevel string) string {
 func buildInbound(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	// A landing node only serves the internal transit inbound; panel users never reach it.
 	if nc.IsRelayLanding() {
-		return buildRelayLandingInbound(nc)
+		return buildRelayLandingInbound(kcfg, nc, tc)
 	}
 
 	listenAddr := "::"
@@ -520,103 +520,12 @@ func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel
 }
 
 func applyStreamSettings(base M, kcfg config.KernelConfig, nc *model.NodeSpec, tc kernel.TLSCert) {
-	ss := M{}
-
-	// Network / transport
-	network := nc.Network
-	if network == "" {
-		network = "tcp"
+	transportAuth := ""
+	if nc.IsRelayLanding() && nc.Relay.VLESS != nil {
+		transportAuth = nc.Relay.VLESS.TransportAuth
 	}
-	ss["network"] = network
-
-	switch network {
-	case "ws":
-		wsSettings := M{}
-		if nc.NetworkSettings != nil {
-			if v, ok := nc.NetworkSettings["path"]; ok {
-				wsSettings["path"] = v
-			}
-			headers := M{}
-			if v, ok := nc.NetworkSettings["headers"]; ok {
-				if headersMap, ok := v.(map[string]interface{}); ok {
-					for k, val := range headersMap {
-						headers[k] = val
-					}
-				}
-			}
-			if v, ok := nc.NetworkSettings["host"]; ok {
-				headers["Host"] = v
-			}
-			if len(headers) > 0 {
-				wsSettings["headers"] = headers
-			}
-		}
-		ss["wsSettings"] = wsSettings
-
-	case "grpc":
-		grpcSettings := M{}
-		if nc.NetworkSettings != nil {
-			if v, ok := nc.NetworkSettings["serviceName"]; ok {
-				grpcSettings["serviceName"] = v
-			} else if v, ok := nc.NetworkSettings["service_name"]; ok {
-				grpcSettings["serviceName"] = v
-			}
-		}
-		ss["grpcSettings"] = grpcSettings
-
-	case "httpupgrade":
-		huSettings := M{}
-		if nc.NetworkSettings != nil {
-			if v, ok := nc.NetworkSettings["path"]; ok {
-				huSettings["path"] = v
-			}
-			if v, ok := nc.NetworkSettings["host"]; ok {
-				huSettings["host"] = v
-			}
-		}
-		ss["httpupgradeSettings"] = huSettings
-
-	case "h2", "http":
-		ss["network"] = "h2"
-		h2Settings := M{}
-		if nc.NetworkSettings != nil {
-			if v, ok := nc.NetworkSettings["path"]; ok {
-				h2Settings["path"] = v
-			}
-			if v, ok := nc.NetworkSettings["host"]; ok {
-				h2Settings["host"] = []interface{}{v}
-			}
-		}
-		ss["httpSettings"] = h2Settings
-
-	case "xhttp", "splithttp":
-		ss["network"] = "xhttp"
-		xhttpSettings := M{}
-		if nc.NetworkSettings != nil {
-			if v, ok := nc.NetworkSettings["path"]; ok {
-				xhttpSettings["path"] = v
-			}
-			if v, ok := nc.NetworkSettings["host"]; ok {
-				xhttpSettings["host"] = v
-			}
-			if v, ok := nc.NetworkSettings["mode"]; ok {
-				xhttpSettings["mode"] = v
-			}
-			if v, ok := nc.NetworkSettings["extra"]; ok {
-				// PHP sends empty arrays [] instead of {} for empty objects;
-				// xray rejects [] for fields that expect objects (e.g. sockopt, tlsSettings).
-				// Recursively strip empty arrays from the extra map before passing to xray.
-				if m, ok := v.(map[string]interface{}); ok && len(m) > 0 {
-					sanitizeEmptyArrays(m)
-					xhttpSettings["extra"] = m
-				}
-			}
-		}
-		ss["xhttpSettings"] = xhttpSettings
-
-	case "tcp":
-		// default, no extra settings
-	}
+	ss := buildTransportStreamSettings(nc.Network, nc.NetworkSettings, transportAuth)
+	network, _ := model.NormalizeRelayVLESSNetwork(nc.Network)
 
 	// TLS
 	if nc.TLS == 1 {
@@ -636,6 +545,9 @@ func applyStreamSettings(base M, kcfg config.KernelConfig, nc *model.NodeSpec, t
 			if echKeys := extractECHServerKeys(nc.TLSSettings); echKeys != "" {
 				tlsSettings["echServerKeys"] = echKeys
 			}
+		}
+		if network == "hysteria" {
+			tlsSettings["alpn"] = []string{"h3"}
 		}
 		if tc.HasCert() {
 			tlsCert := M{

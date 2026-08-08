@@ -71,6 +71,7 @@ type RelayConfig struct {
 	Cipher      string
 	Password    string
 	EntryNodeID int
+	VLESS       *RelayVLESSConfig
 }
 
 type RelayChild struct {
@@ -82,6 +83,19 @@ type RelayChild struct {
 	Port     int
 	Cipher   string
 	Password string
+	VLESS    *RelayVLESSConfig
+}
+
+type RelayVLESSConfig struct {
+	ID              string
+	Network         string
+	NetworkSettings map[string]any
+	TLS             int
+	Flow            string
+	Encryption      string
+	TLSSettings     map[string]any
+	RealitySettings map[string]any
+	TransportAuth   string
 }
 
 func (r *RelayConfig) IsEntry() bool {

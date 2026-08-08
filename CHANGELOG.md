@@ -1,5 +1,14 @@
 # 变更记录
 
+## v1.13-yz.10（待发布）- 2026-08-09
+
+- 中转内部协议在保留 Shadowsocks 的基础上新增 VLESS；入口按逻辑节点生成独立 VLESS 出站，落地生成只含内部 UUID 的 VLESS 入站，用户流量仍只在客户端入口统计一次。
+- VLESS 中转支持 RAW/TCP、WebSocket、gRPC、XHTTP、HTTPUpgrade、mKCP 和 Hysteria 传输，并在启动前二次校验 TLS/Reality 组合、唯一路由编号、内部身份和 Hysteria transport auth。
+- 支持面板下发 VLESS Encryption：入口出站使用 `encryption`，落地入站使用 `decryption`；两者不写入 Node 本地配置，普通 Shadowsocks 中转结构保持兼容。
+- 抽取统一传输构建逻辑供普通 VLESS 入站、VLESS 中转入站和出站复用，补齐 mKCP、Hysteria、RAW/TCP 传输设置并移除 Node 侧 H2 兼容生成路径。
+- 新增当前 Xray 有效矩阵、VLESS Encryption、错误组合和 Shadowsocks 回归测试；前置入口与内部链路各 16 组有效组合生成的 JSON 均通过固定 YZ-Xray-core 自带解析器。
+- 本版本不修改 YZ-Xray-core，继续固定 `v26.7.11-yz.1` 对应 pseudo-version。
+
 ## v1.13-yz.9 - 2026-08-02
 
 - 修复 SS2022 用户 UUID 轮换后，Xray `UserManager` 热更新路径直接使用原始 UUID、导致动态加入的用户密钥与订阅不一致的问题。

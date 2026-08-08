@@ -67,6 +67,70 @@ func relayLandingNode() *panel.NodeConfig {
 	}
 }
 
+func relayVLESSChild(network string, tlsMode int) panel.RelayChild {
+	settings := map[string]interface{}{}
+	switch network {
+	case "ws", "httpupgrade", "xhttp":
+		settings["path"] = "/relay"
+		settings["host"] = "landing.example.com"
+	case "grpc":
+		settings["serviceName"] = "relay"
+	}
+
+	return panel.RelayChild{
+		NodeID:   17,
+		Tag:      "relay-17",
+		RouteID:  17,
+		Protocol: "vless",
+		Address:  "10.0.0.17",
+		Port:     29388,
+		VLESS: &panel.RelayVLESSConfig{
+			ID:              "11111111-2222-0000-8444-555555555555",
+			Network:         network,
+			NetworkSettings: settings,
+			TLS:             tlsMode,
+			Encryption:      "none",
+			TLSSettings: map[string]interface{}{
+				"server_name": "landing.example.com",
+				"fingerprint": "chrome",
+			},
+			RealitySettings: map[string]interface{}{
+				"server_name": "landing.example.com",
+				"public_key":  "TESTonlyPUBLICkeyNOTaREALsecret0123456789ab",
+				"short_id":    "89abcdef",
+				"fingerprint": "chrome",
+			},
+			TransportAuth: "relay-hysteria-test-auth",
+		},
+	}
+}
+
+func relayVLESSLandingNode(network string, tlsMode int) *panel.NodeConfig {
+	return &panel.NodeConfig{
+		Protocol:        "vless",
+		ServerPort:      29388,
+		Network:         network,
+		NetworkSettings: relayVLESSChild(network, tlsMode).VLESS.NetworkSettings,
+		TLS:             tlsMode,
+		Decryption:      "none",
+		TLSSettings: map[string]interface{}{
+			"private_key": "aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789abcdef0",
+			"server_name": "landing.example.com",
+			"short_id":    "89abcdef",
+		},
+		Relay: &panel.RelayConfig{
+			Mode:        panel.RelayModeLanding,
+			Protocol:    "vless",
+			ListenPort:  29388,
+			EntryNodeID: 3,
+			VLESS: &panel.RelayVLESSConfig{
+				ID:            "11111111-2222-0000-8444-555555555555",
+				TransportAuth: "relay-hysteria-test-auth",
+			},
+		},
+	}
+}
+
 // The entry must keep exactly one client inbound no matter how many logical
 // nodes hang off it — that is the whole point of the single-entry design.
 func TestBuildConfig_RelayEntrySingleInbound(t *testing.T) {
@@ -228,6 +292,104 @@ func TestBuildConfig_RelayLandingInbound(t *testing.T) {
 	}
 	if _, err := serial.LoadJSONConfig(bytes.NewReader(raw)); err != nil {
 		t.Fatalf("xray rejected relay landing config: %v", err)
+	}
+}
+
+func TestBuildConfig_RelayVLESSTransportMatrixParses(t *testing.T) {
+	cases := []struct {
+		network string
+		tls     int
+	}{
+		{"tcp", 0}, {"tcp", 1}, {"tcp", 2},
+		{"ws", 0}, {"ws", 1},
+		{"grpc", 0}, {"grpc", 1}, {"grpc", 2},
+		{"xhttp", 0}, {"xhttp", 1}, {"xhttp", 2},
+		{"httpupgrade", 0}, {"httpupgrade", 1},
+		{"kcp", 0}, {"kcp", 1},
+		{"hysteria", 1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.network+"-tls-"+string(rune('0'+tc.tls)), func(t *testing.T) {
+			entry := relayEntryNode()
+			entry.Relay.Children = []panel.RelayChild{relayVLESSChild(tc.network, tc.tls)}
+			entryRaw, err := marshalConfig(testKernelCfg, testNodeSpec(entry), testUsers, kernel.TLSCert{})
+			if err != nil {
+				t.Fatalf("marshal entry: %v", err)
+			}
+			if _, err := serial.LoadJSONConfig(bytes.NewReader(entryRaw)); err != nil {
+				t.Fatalf("xray rejected entry %s tls=%d: %v\n%s", tc.network, tc.tls, err, entryRaw)
+			}
+
+			landing := relayVLESSLandingNode(tc.network, tc.tls)
+			landingRaw, err := marshalConfig(testKernelCfg, testNodeSpec(landing), nil, kernel.TLSCert{})
+			if err != nil {
+				t.Fatalf("marshal landing: %v", err)
+			}
+			if _, err := serial.LoadJSONConfig(bytes.NewReader(landingRaw)); err != nil {
+				t.Fatalf("xray rejected landing %s tls=%d: %v\n%s", tc.network, tc.tls, err, landingRaw)
+			}
+		})
+	}
+}
+
+func TestBuildConfig_RelayEntryTransportMatrixParses(t *testing.T) {
+	cases := []struct {
+		network string
+		tls     int
+	}{
+		{"tcp", 0}, {"tcp", 1}, {"tcp", 2},
+		{"ws", 0}, {"ws", 1},
+		{"grpc", 0}, {"grpc", 1}, {"grpc", 2},
+		{"xhttp", 0}, {"xhttp", 1}, {"xhttp", 2},
+		{"httpupgrade", 0}, {"httpupgrade", 1},
+		{"kcp", 0}, {"kcp", 1},
+		{"hysteria", 1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.network+"-tls-"+string(rune('0'+tc.tls)), func(t *testing.T) {
+			entry := relayEntryNode()
+			entry.Network = tc.network
+			entry.NetworkSettings = relayVLESSChild(tc.network, tc.tls).VLESS.NetworkSettings
+			entry.TLS = tc.tls
+			entry.Flow = "none"
+
+			raw, err := marshalConfig(testKernelCfg, testNodeSpec(entry), testUsers, kernel.TLSCert{})
+			if err != nil {
+				t.Fatalf("marshal entry: %v", err)
+			}
+			if _, err := serial.LoadJSONConfig(bytes.NewReader(raw)); err != nil {
+				t.Fatalf("xray rejected relay entry %s tls=%d: %v\n%s", tc.network, tc.tls, err, raw)
+			}
+		})
+	}
+}
+
+func TestBuildConfig_RelayVLESSSupportsEncryption(t *testing.T) {
+	const encryption = "mlkem768x25519plus.native.0rtt.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	const decryption = "mlkem768x25519plus.native.600s.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+	entry := relayEntryNode()
+	child := relayVLESSChild("tcp", 0)
+	child.VLESS.Encryption = encryption
+	entry.Relay.Children = []panel.RelayChild{child}
+	entryRaw, err := marshalConfig(testKernelCfg, testNodeSpec(entry), testUsers, kernel.TLSCert{})
+	if err != nil {
+		t.Fatalf("marshal entry: %v", err)
+	}
+	if _, err := serial.LoadJSONConfig(bytes.NewReader(entryRaw)); err != nil {
+		t.Fatalf("xray rejected VLESS Encryption outbound: %v", err)
+	}
+
+	landing := relayVLESSLandingNode("tcp", 0)
+	landing.Decryption = decryption
+	landingRaw, err := marshalConfig(testKernelCfg, testNodeSpec(landing), nil, kernel.TLSCert{})
+	if err != nil {
+		t.Fatalf("marshal landing: %v", err)
+	}
+	if _, err := serial.LoadJSONConfig(bytes.NewReader(landingRaw)); err != nil {
+		t.Fatalf("xray rejected VLESS Encryption inbound: %v", err)
 	}
 }
 

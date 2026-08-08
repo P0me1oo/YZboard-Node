@@ -44,18 +44,127 @@ func landingSpec() *panel.NodeConfig {
 	}
 }
 
+func vlessLandingSpec(network, decryption string) *panel.NodeConfig {
+	return &panel.NodeConfig{
+		Protocol:   "vless",
+		ServerPort: 29388,
+		Network:    network,
+		Decryption: decryption,
+		Relay: &panel.RelayConfig{
+			Mode:       panel.RelayModeLanding,
+			Protocol:   "vless",
+			ListenPort: 29388,
+			VLESS: &panel.RelayVLESSConfig{
+				ID: "11111111-2222-0000-8444-555555555555",
+			},
+		},
+	}
+}
+
+func vlessRelayChild(network string, tlsMode int) panel.RelayChild {
+	return panel.RelayChild{
+		NodeID:   17,
+		Tag:      "relay-17",
+		RouteID:  17,
+		Protocol: "vless",
+		Address:  "10.0.0.17",
+		Port:     29388,
+		VLESS: &panel.RelayVLESSConfig{
+			ID:         "11111111-2222-0000-8444-555555555555",
+			Network:    network,
+			TLS:        tlsMode,
+			Encryption: "none",
+			TLSSettings: map[string]interface{}{
+				"server_name": "landing.example.com",
+			},
+			RealitySettings: map[string]interface{}{
+				"server_name": "landing.example.com",
+				"public_key":  "TESTonlyPUBLICkeyNOTaREALsecret0123456789ab",
+				"fingerprint": "chrome",
+			},
+			TransportAuth: "relay-hysteria-test-auth",
+		},
+	}
+}
+
 func xrayKernel() config.KernelConfig { return config.KernelConfig{Type: "xray"} }
 
 func TestValidateNodeSpec_RelayAccepted(t *testing.T) {
+	wsEntry := entrySpec()
+	wsEntry.Network = "ws"
+	wsEntry.TLS = 1
+	wsEntry.Flow = "none"
 	for name, nc := range map[string]*panel.NodeConfig{
-		"entry":   entrySpec(),
-		"landing": landingSpec(),
+		"entry":                     entrySpec(),
+		"entry ws tls":              wsEntry,
+		"landing":                   landingSpec(),
+		"vless landing default tcp": vlessLandingSpec("", "none"),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := NodeSpecFromPanelValidated(nc, xrayKernel()); err != nil {
+			spec, err := NodeSpecFromPanelValidated(nc, xrayKernel())
+			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
+			if name == "entry ws tls" && spec.Flow != "" {
+				t.Fatalf("flow none was not normalized: %q", spec.Flow)
+			}
 		})
+	}
+}
+
+func TestValidateNodeSpec_RelayVLESSMatrix(t *testing.T) {
+	valid := []struct {
+		network string
+		tls     int
+	}{
+		{"tcp", 0}, {"tcp", 1}, {"tcp", 2},
+		{"ws", 0}, {"ws", 1},
+		{"grpc", 0}, {"grpc", 1}, {"grpc", 2},
+		{"xhttp", 0}, {"xhttp", 1}, {"xhttp", 2},
+		{"httpupgrade", 0}, {"httpupgrade", 1},
+		{"kcp", 0}, {"kcp", 1},
+		{"hysteria", 1},
+	}
+	for _, item := range valid {
+		nc := entrySpec()
+		nc.Relay.Children = []panel.RelayChild{vlessRelayChild(item.network, item.tls)}
+		if _, err := NodeSpecFromPanelValidated(nc, xrayKernel()); err != nil {
+			t.Fatalf("valid combination %s tls=%d rejected: %v", item.network, item.tls, err)
+		}
+	}
+
+	validEncryption := entrySpec()
+	validEncryption.Relay.Children = []panel.RelayChild{vlessRelayChild("tcp", 0)}
+	validEncryption.Relay.Children[0].VLESS.Encryption = "mlkem768x25519plus.native.0rtt." + strings.Repeat("A", 43)
+	if _, err := NodeSpecFromPanelValidated(validEncryption, xrayKernel()); err != nil {
+		t.Fatalf("valid vless encryption rejected: %v", err)
+	}
+
+	invalid := []struct {
+		network string
+		tls     int
+	}{
+		{"h2", 1}, {"ws", 2}, {"httpupgrade", 2}, {"kcp", 2},
+		{"hysteria", 0}, {"hysteria", 2},
+	}
+	for _, item := range invalid {
+		nc := entrySpec()
+		nc.Relay.Children = []panel.RelayChild{vlessRelayChild(item.network, item.tls)}
+		if _, err := NodeSpecFromPanelValidated(nc, xrayKernel()); err == nil {
+			t.Fatalf("invalid combination %s tls=%d was accepted", item.network, item.tls)
+		}
+	}
+
+	invalidEncryption := entrySpec()
+	invalidEncryption.Relay.Children = []panel.RelayChild{vlessRelayChild("tcp", 0)}
+	invalidEncryption.Relay.Children[0].VLESS.Encryption = "mlkem768x25519plus.native.0rtt." + strings.Repeat("A", 42)
+	if _, err := NodeSpecFromPanelValidated(invalidEncryption, xrayKernel()); err == nil {
+		t.Fatalf("invalid vless encryption was accepted")
+	}
+
+	invalidDecryption := vlessLandingSpec("tcp", "mlkem768x25519plus.native.600s."+strings.Repeat("A", 42))
+	if _, err := NodeSpecFromPanelValidated(invalidDecryption, xrayKernel()); err == nil {
+		t.Fatalf("invalid vless decryption was accepted")
 	}
 }
 
@@ -76,6 +185,22 @@ func TestValidateNodeSpec_RelayRejected(t *testing.T) {
 			name:   "entry not vless",
 			mutate: func(nc *panel.NodeConfig) { nc.Protocol = "trojan" },
 			want:   "requires a vless inbound",
+		},
+		{
+			name: "entry reality over websocket",
+			mutate: func(nc *panel.NodeConfig) {
+				nc.Network = "ws"
+				nc.TLS = 2
+			},
+			want: "reality only supports",
+		},
+		{
+			name: "entry h2 removed",
+			mutate: func(nc *panel.NodeConfig) {
+				nc.Network = "h2"
+				nc.TLS = 1
+			},
+			want: "unsupported vless transport",
 		},
 		{
 			name:   "route id zero",

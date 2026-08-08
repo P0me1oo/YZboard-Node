@@ -96,6 +96,7 @@ func NodeSpecFromPanel(nc *panel.NodeConfig) *NodeSpec {
 			Cipher:      nc.Relay.Cipher,
 			Password:    nc.Relay.Password,
 			EntryNodeID: nc.Relay.EntryNodeID,
+			VLESS:       relayVLESSFromPanel(nc.Relay.VLESS),
 		}
 		if len(nc.Relay.Children) > 0 {
 			relay.Children = make([]RelayChild, 0, len(nc.Relay.Children))
@@ -109,6 +110,7 @@ func NodeSpecFromPanel(nc *panel.NodeConfig) *NodeSpec {
 					Port:     child.Port,
 					Cipher:   child.Cipher,
 					Password: child.Password,
+					VLESS:    relayVLESSFromPanel(child.VLESS),
 				})
 			}
 		}
@@ -134,7 +136,7 @@ func NodeSpecFromPanel(nc *panel.NodeConfig) *NodeSpec {
 		PluginOpt:           nc.PluginOpt,
 		ServerKey:           nc.ServerKey,
 		TLS:                 nc.TLS,
-		Flow:                nc.Flow,
+		Flow:                normalizeVLESSFlow(nc.Flow),
 		Decryption:          nc.Decryption,
 		TLSSettings:         cloneAnyMap(nc.TLSSettings),
 		Host:                nc.Host,
@@ -264,6 +266,7 @@ func (n *NodeSpec) ToPanel() *panel.NodeConfig {
 			Cipher:      n.Relay.Cipher,
 			Password:    n.Relay.Password,
 			EntryNodeID: n.Relay.EntryNodeID,
+			VLESS:       relayVLESSToPanel(n.Relay.VLESS),
 		}
 		if len(n.Relay.Children) > 0 {
 			relay.Children = make([]panel.RelayChild, 0, len(n.Relay.Children))
@@ -277,6 +280,7 @@ func (n *NodeSpec) ToPanel() *panel.NodeConfig {
 					Port:     child.Port,
 					Cipher:   child.Cipher,
 					Password: child.Password,
+					VLESS:    relayVLESSToPanel(child.VLESS),
 				})
 			}
 		}
@@ -319,6 +323,40 @@ func (n *NodeSpec) ToPanel() *panel.NodeConfig {
 		Multiplex:           multiplex,
 		AcceptProxyProtocol: n.AcceptProxyProtocol,
 		Relay:               relay,
+	}
+}
+
+func relayVLESSFromPanel(v *panel.RelayVLESSConfig) *RelayVLESSConfig {
+	if v == nil {
+		return nil
+	}
+	return &RelayVLESSConfig{
+		ID:              v.ID,
+		Network:         v.Network,
+		NetworkSettings: cloneAnyMap(v.NetworkSettings),
+		TLS:             v.TLS,
+		Flow:            normalizeVLESSFlow(v.Flow),
+		Encryption:      v.Encryption,
+		TLSSettings:     cloneAnyMap(v.TLSSettings),
+		RealitySettings: cloneAnyMap(v.RealitySettings),
+		TransportAuth:   v.TransportAuth,
+	}
+}
+
+func relayVLESSToPanel(v *RelayVLESSConfig) *panel.RelayVLESSConfig {
+	if v == nil {
+		return nil
+	}
+	return &panel.RelayVLESSConfig{
+		ID:              v.ID,
+		Network:         v.Network,
+		NetworkSettings: cloneAnyMap(v.NetworkSettings),
+		TLS:             v.TLS,
+		Flow:            v.Flow,
+		Encryption:      v.Encryption,
+		TLSSettings:     cloneAnyMap(v.TLSSettings),
+		RealitySettings: cloneAnyMap(v.RealitySettings),
+		TransportAuth:   v.TransportAuth,
 	}
 }
 
