@@ -6,26 +6,26 @@
 
 | 项目 | 标识 |
 | --- | --- |
-| Node 源码目标版本 | `v1.13-yz.10`（待发布） |
-| Node 发布版本 | `v1.13-yz.9` |
+| Node 源码目标版本 | `v1.13-yz.10`（已发布） |
+| Node 发布版本 | `v1.13-yz.10` |
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.1` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | `fead44ba92bb5a32d0a734628e82a04615e8b280` |
+| Node Release Tag 对应 commit | `82114adc8755ef520df6d99e3cd25a4b97073cec` |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
-| Node Release 构建 | GitHub Actions [run 30708250372](https://github.com/P0me1oo/YZboard-Node/actions/runs/30708250372)，由固定 Tag `v1.13-yz.9` 构建 |
-| Node Docker 标签 | `ghcr.io/p0me1oo/yzboard-node:v1.13-yz.9`、`ghcr.io/p0me1oo/yzboard-node:fead44ba92bb5a32d0a734628e82a04615e8b280`、`ghcr.io/p0me1oo/yzboard-node:latest` |
-| Node Docker manifest | OCI index `sha256:0bd9095aea1e561ff4139756f1dfdd5cab7469e1fab1d66c83cbba1555e120e9`；包含 `linux/amd64` 与 `linux/arm64` |
-| Node Docker OCI 标识 | 两个架构均为 revision `fead44ba92bb5a32d0a734628e82a04615e8b280`、version `v1.13-yz.9` |
-| YZboard 目标版本 | `1.4.0`（待发布；VLESS 落地需要与 `v1.13-yz.10` 成套使用） |
-| 最近已发布 YZboard 兼容代码 | `90c11685eab03a68e167a3c0c969bd774a89e362`（历史面板版本 `1.2.1`） |
+| Node Release 构建 | GitHub Actions [run 31269894172](https://github.com/P0me1oo/YZboard-Node/actions/runs/31269894172)，由固定 Tag `v1.13-yz.10` 构建 |
+| Node Docker 标签 | `ghcr.io/p0me1oo/yzboard-node:v1.13-yz.10`、`ghcr.io/p0me1oo/yzboard-node:82114adc8755ef520df6d99e3cd25a4b97073cec`、`ghcr.io/p0me1oo/yzboard-node:latest` |
+| Node Docker manifest | OCI index `sha256:48ce4fe3605e2e3aa29292a65fc5003ca2561c098ff3ae87ba85da86a462f1ed`；包含 `linux/amd64` 与 `linux/arm64` |
+| Node Docker OCI 标识 | 两个架构均为 revision `82114adc8755ef520df6d99e3cd25a4b97073cec`、version `v1.13-yz.10` |
+| YZboard 兼容版本 | `1.4.0`（VLESS 落地需要与 `v1.13-yz.10` 成套使用） |
+| 最近已发布 YZboard 兼容代码 | `cf698392cd0b0623876b5166ab31b10fea2cb889`（面板 `v1.4.0`） |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
 | Xray 上游 Tag commit | `50231eaff98ccc31b5cbd247a721c16e97fe5ec1` |
 | YZ-Xray-core fork 版本 | `v26.7.11-yz.1` |
 | YZ-Xray-core fork commit | `620bee93867095f73880056cdfb08bc54a15f69e` |
 | Node 中的 Xray replace | `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260724203739-620bee938670` |
-| YZboard 兼容标识 | `xray-v26.7.11-yz.1`（面板版本 `1.2.1`） |
+| YZboard 兼容标识 | `xray-v26.7.11-yz.1`（面板版本 `1.4.0`） |
 | sing-box `require` 版本 | `v1.13.2` |
 | sing-box 实际 replacement | `github.com/cedar2025/sing-box v1.14.0-alpha.2.0.20260316103356-2e665cb7e295` |
 
@@ -66,6 +66,17 @@ VERSION=v1.13-yz.10 make build-linux
 - Node 自身版本、构建时间和提交短 SHA；
 - Xray 上游 Tag/commit、YZ fork 版本/commit，以及实际模块替换版本；
 - sing-box 请求版本和实际 replacement 版本。
+
+`v1.13-yz.10` Release 资产校验值：
+
+| 资产 | SHA-256 |
+| --- | --- |
+| `xboard-node-linux-amd64` | `ef103c4de2ec4d5e50785491897ccbf0b6c77be5b85c9011f8703aa2d9df333d` |
+| `xboard-node-linux-arm64` | `7c0bb626d775eac127ca5e0fce8a7d7381417df61af6fb0471cc2b60a1f54a36` |
+| `xbctl-linux-amd64` | `368ce32546c3e4cd431bf788744cb1ebbf997f57f4123e63671aaf3c5a51a14d` |
+| `xbctl-linux-arm64` | `cdcbc9a3c811592c546c2761c07bff0e600d0304aec4829c296fdb2858b3a54f` |
+| `install.sh` | `d9e6df2cf7b1cd0441c1d2a74d55a2149ed2f25a18120c530fbb650f89bab431` |
+| `SHA256SUMS` | `e3c87d67623b787f6f08ff0372d6aa1201cab3954ee60c1cd1dfee2b20c24bdc` |
 
 `v1.13-yz.9` Release 资产校验值：
 
@@ -162,7 +173,7 @@ go build -ldflags "-X main.version=v1.13-yz.10" ./cmd/xboard-node
 go build -ldflags "-X main.version=v1.13-yz.10" ./cmd/xbctl
 ```
 
-安装器和升级器从同一 Node Release 下载 `xboard-node` 和 `xbctl`，并使用该 Release 的 `SHA256SUMS` 校验。面板通过 `releases/latest/download/install.sh` 获取最新正式安装器，安装器再通过 `latest` 解析同一正式 Release；需要回滚时必须传入明确的旧 Node Tag。`.github/workflows/ci.yml` 已配置 `v*` Tag 推送触发，但截至 `v1.13-yz.9`，推送 Tag 仍未产生 workflow run；`yz.2` 至 `yz.9` 的正式发布都通过 `workflow_dispatch` 传入固定 `release_tag` 完成。workflow 会 checkout 该 Tag 并校验 commit 一致后才继续构建。根因待查，暂按手动触发执行。在 Release 记录和六个资产出现前不能把 Tag 视为已发布。Xray fork 的回滚边界由 Node `go.mod` 中记录的 pseudo-version 和对应 fork commit 确定。
+安装器和升级器从同一 Node Release 下载 `xboard-node` 和 `xbctl`，并使用该 Release 的 `SHA256SUMS` 校验。面板通过 `releases/latest/download/install.sh` 获取最新正式安装器，安装器再通过 `latest` 解析同一正式 Release；需要回滚时必须传入明确的旧 Node Tag。`.github/workflows/ci.yml` 已配置 `v*` Tag 推送触发，但 `v1.13-yz.10` 推送后仍未产生 workflow run；本版继续通过 `workflow_dispatch` 传入固定 `release_tag=v1.13-yz.10` 发布，workflow 检出的固定 Tag 和校验后的源码 commit 均为 `82114adc8755ef520df6d99e3cd25a4b97073cec`。在 Release 记录和六个资产出现前不能把 Tag 视为已发布。Xray fork 的回滚边界由 Node `go.mod` 中记录的 pseudo-version 和对应 fork commit 确定。
 
 ## 后续上游同步
 
