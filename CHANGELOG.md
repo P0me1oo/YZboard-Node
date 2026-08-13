@@ -1,6 +1,14 @@
 # 变更记录
 
-## v1.13-yz.10（待发布）- 2026-08-09
+## v1.13-yz.11 - 2026-08-14
+
+- 安装器新增 Alpine Linux/OpenRC 支持，自动识别正在运行的 systemd 或 OpenRC，并分别生成 systemd unit 或 `/etc/init.d/xboard-node` 服务脚本。
+- OpenRC 服务使用 `supervise-daemon` 保持前台进程托管，异常退出后等待 5 秒自动拉起，开机启动加入 `default` runlevel，日志写入 `/var/log/xboard-node.log`。
+- OpenRC 启动时逐行解析 `credentials.env` 的 `KEY=VALUE`，不把凭据文件当作 Shell 脚本执行；安装、升级、健康检查、失败回滚、状态查询和卸载统一通过服务管理器抽象执行。
+- `xbctl service`、绑定变更、升级、卸载和状态列表同时支持 systemd 与 OpenRC；在 Alpine 的 root 会话中不再依赖默认未安装的 `sudo`。
+- 新增服务管理器识别、命令映射、状态归一化、服务文件渲染与安装器 Shell 语法回归测试；本版本不修改 YZ-Xray-core，继续固定 `v26.7.11-yz.1` 对应 pseudo-version。
+
+## v1.13-yz.10 - 2026-08-09
 
 - 中转内部协议在保留 Shadowsocks 的基础上新增 VLESS；入口按逻辑节点生成独立 VLESS 出站，落地生成只含内部 UUID 的 VLESS 入站，用户流量仍只在客户端入口统计一次。
 - VLESS 中转支持 RAW/TCP、WebSocket、gRPC、XHTTP、HTTPUpgrade、mKCP 和 Hysteria 传输，并在启动前二次校验 TLS/Reality 组合、唯一路由编号、内部身份和 Hysteria transport auth。

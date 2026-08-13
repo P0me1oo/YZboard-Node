@@ -29,8 +29,6 @@ const (
 	defaultCredentialsPath = "/etc/xboard-node/credentials.env"
 	defaultBinaryPath      = "/usr/local/bin/xboard-node"
 	defaultCLIPath         = "/usr/local/bin/xbctl"
-	serviceName            = "xboard-node.service"
-	serviceFilePath        = "/etc/systemd/system/xboard-node.service"
 	defaultInstallRoot     = "/etc/xboard-node"
 	downloadBase           = "https://github.com/P0me1oo/YZboard-Node/releases"
 )
@@ -241,7 +239,7 @@ func runStatus() error {
 	fmt.Printf("  version:  %s\n", ver)
 
 	// Service status
-	svc := systemctlState()
+	svc := serviceState()
 	fmt.Printf("  service:  %s\n", svc)
 
 	// Health
@@ -298,21 +296,7 @@ func runService(args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: xbctl service <status|start|stop|restart|enable|disable|logs>")
 	}
-	sub := args[0]
-	rest := args[1:]
-	switch sub {
-	case "status":
-		return runCommand("sudo", append([]string{"systemctl", "status", serviceName, "--no-pager"}, rest...)...)
-	case "start", "stop", "restart", "enable", "disable":
-		return runCommand("sudo", append([]string{"systemctl", sub, serviceName}, rest...)...)
-	case "logs":
-		if len(rest) == 0 {
-			rest = []string{"-f"}
-		}
-		return runCommand("sudo", append([]string{"journalctl", "-u", serviceName}, rest...)...)
-	default:
-		return fmt.Errorf("unknown service command: %s", sub)
-	}
+	return runDetectedManagedService(args[0], os.Geteuid() != 0, args[1:]...)
 }
 
 func runHealth() error {
@@ -379,7 +363,7 @@ func runBindAdd(mode string, args []string) error {
 	}
 	// Restart service to pick up new config
 	fmt.Println("Restarting service...")
-	if err := runCommand("systemctl", "restart", serviceName); err != nil {
+	if err := runDetectedManagedService("restart", false); err != nil {
 		return fmt.Errorf("service restart failed: %w", err)
 	}
 	fmt.Println("Binding added successfully")
@@ -402,6 +386,10 @@ func runUpgrade(args []string) error {
 	arch := runtime.GOARCH
 	if arch != "amd64" && arch != "arm64" {
 		return fmt.Errorf("unsupported architecture: %s", arch)
+	}
+	manager, err := detectServiceManager()
+	if err != nil {
+		return err
 	}
 
 	fmt.Println("Starting upgrade...")
@@ -491,8 +479,10 @@ func runUpgrade(args []string) error {
 
 	// Restart service
 	fmt.Println("Restarting service...")
-	runCommand("systemctl", "daemon-reload")
-	if err := runCommand("systemctl", "restart", serviceName); err != nil {
+	if err := reloadServiceManager(manager); err != nil {
+		fmt.Printf("Warning: reload service manager failed: %v\n", err)
+	}
+	if err := runManagedService(manager, "restart", false); err != nil {
 		fmt.Println("Restart failed, rolling back...")
 		rollbackOK := true
 		if fileExists(backupBinary) {
@@ -507,8 +497,8 @@ func runUpgrade(args []string) error {
 				rollbackOK = false
 			}
 		}
-		runCommand("systemctl", "daemon-reload")
-		if e := runCommand("systemctl", "restart", serviceName); e != nil {
+		reloadServiceManager(manager)
+		if e := runManagedService(manager, "restart", false); e != nil {
 			return fmt.Errorf("upgrade and rollback restart both failed: %w", e)
 		}
 		if rollbackOK {
@@ -563,18 +553,27 @@ func runUninstall(args []string) error {
 
 	var warnings []string
 
+	manager, managerErr := detectServiceManager()
+	if managerErr != nil {
+		return managerErr
+	}
+	serviceFilePath, pathErr := serviceFilePathFor(manager)
+	if pathErr != nil {
+		return pathErr
+	}
+
 	// Stop and disable service
 	if fileExists(serviceFilePath) {
-		if err := runCommand("systemctl", "stop", serviceName); err != nil {
+		if err := runManagedService(manager, "stop", false); err != nil {
 			warnings = append(warnings, fmt.Sprintf("stop service: %v", err))
 		}
-		if err := runCommand("systemctl", "disable", serviceName); err != nil {
+		if err := runManagedService(manager, "disable", false); err != nil {
 			warnings = append(warnings, fmt.Sprintf("disable service: %v", err))
 		}
 		if err := os.Remove(serviceFilePath); err != nil {
 			warnings = append(warnings, fmt.Sprintf("remove service file: %v", err))
 		}
-		runCommand("systemctl", "daemon-reload")
+		reloadServiceManager(manager)
 	}
 
 	// Remove binaries
@@ -849,7 +848,7 @@ func removeBinding(panelURL string, nodeID int, machineID int, instanceID string
 		if err := writeInstallMeta(defaultMetaPath, root); err != nil {
 			return err
 		}
-		runCommand("systemctl", "stop", serviceName)
+		runDetectedManagedService("stop", false)
 		fmt.Printf("removed %d binding(s)\n", len(removed))
 		fmt.Println("All bindings removed. Service stopped.")
 		fmt.Println("Use 'xbctl bind add-node/add-machine' to add a new binding, or 'xbctl uninstall' to fully uninstall.")
@@ -867,7 +866,7 @@ func removeBinding(panelURL string, nodeID int, machineID int, instanceID string
 	if err := writeInstallMeta(defaultMetaPath, root); err != nil {
 		return err
 	}
-	if err := runCommand("systemctl", "restart", serviceName); err != nil {
+	if err := runDetectedManagedService("restart", false); err != nil {
 		return err
 	}
 	fmt.Printf("removed %d binding(s)\n", len(removed))
@@ -1076,7 +1075,7 @@ func collectRowsFromMeta() ([]instanceRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	serviceStatus := systemctlState()
+	serviceStatus := serviceState()
 	healthStatus := healthStatus()
 	rows := make([]instanceRow, 0, len(meta.Instances))
 	for _, inst := range meta.Instances {
@@ -1102,7 +1101,7 @@ func collectRowsFromConfig() ([]instanceRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	serviceStatus := systemctlState()
+	serviceStatus := serviceState()
 	healthStatus := healthStatus()
 	rows := make([]instanceRow, 0, len(instances))
 	for _, inst := range instances {
@@ -1138,19 +1137,6 @@ func printRows(rows []instanceRow, output string) error {
 	tw.Flush()
 	_, err := fmt.Print(buf.String())
 	return err
-}
-
-func systemctlState() string {
-	cmd := exec.Command("systemctl", "is-active", serviceName)
-	out, err := cmd.CombinedOutput()
-	state := strings.TrimSpace(string(out))
-	if state != "" {
-		return state
-	}
-	if err != nil {
-		return "unknown"
-	}
-	return state
 }
 
 func healthStatus() string {
@@ -1224,31 +1210,6 @@ func latestInstanceID(instances []*config.Config) string {
 		return id
 	}
 	return ""
-}
-
-func regenerateServiceFile() error {
-	unit := fmt.Sprintf(`[Unit]
-Description=Xboard Node Backend
-Documentation=https://github.com/P0me1oo/YZboard-Node
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=%s
-EnvironmentFile=-%s
-ExecStart=%s -c %s
-Restart=always
-RestartSec=5
-LimitNOFILE=1048576
-NoNewPrivileges=true
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-`, defaultInstallRoot, defaultCredentialsPath, defaultBinaryPath, defaultConfigPath)
-	return os.WriteFile(serviceFilePath, []byte(unit), 0o644)
 }
 
 func machineIDPtr(cfg *config.Config) *int {
@@ -1426,7 +1387,7 @@ func runConfigKernel(args []string) error {
 		return err
 	}
 	fmt.Printf("updated %d instance(s) in %s\n", changed, cfgPath)
-	fmt.Println("restart the service to apply: systemctl restart xboard-node")
+	fmt.Println("restart the service to apply: xbctl service restart")
 	return nil
 }
 

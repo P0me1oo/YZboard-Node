@@ -58,6 +58,9 @@ jobs:
       - name: Run tests
         run: make test
 
+      - name: Validate installer syntax
+        run: bash -n install.sh tests/install_service_manager_test.sh
+
   build:
     name: Build
     runs-on: ubuntu-latest

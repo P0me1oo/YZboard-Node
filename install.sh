@@ -15,8 +15,13 @@ INSTALL_META="${INSTALL_ROOT}/install-meta.json"
 CONFIG_FILE="${INSTALL_ROOT}/config.yml"
 CREDENTIALS_FILE="${INSTALL_ROOT}/credentials.env"
 BINARY_PATH="/usr/local/bin/xboard-node"
-SERVICE_NAME="xboard-node.service"
-SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
+SERVICE_NAME="xboard-node"
+SYSTEMD_SERVICE_NAME="${SERVICE_NAME}.service"
+SYSTEMD_SERVICE_PATH="/etc/systemd/system/${SYSTEMD_SERVICE_NAME}"
+OPENRC_SERVICE_PATH="/etc/init.d/${SERVICE_NAME}"
+OPENRC_LOG_PATH="/var/log/${SERVICE_NAME}.log"
+SERVICE_MANAGER=""
+SERVICE_PATH=""
 CLI_PATH="/usr/local/bin/xbctl"
 INSTALLER_COPY_PATH="${INSTALL_ROOT}/install.sh"
 CLI_BINARY_SOURCE=""
@@ -95,6 +100,7 @@ load_health_port_from_config() {
 
 rollback_install() {
     log_warn "Rolling back installation"
+    service_stop >/dev/null 2>&1 || true
     if [ -n "$BACKUP_PATH" ] && [ -d "$BACKUP_PATH" ]; then
         if [ -f "$BACKUP_PATH/xboard-node" ]; then
             install -m 755 "$BACKUP_PATH/xboard-node" "$BINARY_PATH"
@@ -121,24 +127,24 @@ rollback_install() {
         else
             rm -f "$CLI_PATH"
         fi
-        if [ -f "$BACKUP_PATH/${SERVICE_NAME}" ]; then
-            install -m 644 "$BACKUP_PATH/${SERVICE_NAME}" "$SERVICE_PATH"
+        if [ -f "$BACKUP_PATH/service" ]; then
+            install -m "$(service_file_mode)" "$BACKUP_PATH/service" "$SERVICE_PATH"
         else
             rm -f "$SERVICE_PATH"
         fi
     fi
     load_health_port_from_config "$CONFIG_FILE"
-    systemctl daemon-reload || true
+    service_reload || true
     if [ "$SERVICE_EXISTED" -eq 1 ] || [ -f "$SERVICE_PATH" ]; then
-        systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
-        systemctl restart "$SERVICE_NAME" >/dev/null 2>&1 || true
+        service_reset_failed >/dev/null 2>&1 || true
+        service_restart >/dev/null 2>&1 || true
         if ! wait_for_health; then
             log_error "Rollback completed but restored service did not become healthy"
             show_recent_logs
             return 1
         fi
     else
-        systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
+        service_disable >/dev/null 2>&1 || true
     fi
     log_warn "Rollback complete"
 }
@@ -360,15 +366,92 @@ detect_os() {
     fi
 }
 
-ensure_systemd() {
-    if ! command -v systemctl >/dev/null 2>&1; then
-        log_error "systemd is required for this installer"
-        exit 1
+detect_service_manager() {
+    if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+        SERVICE_MANAGER="systemd"
+        SERVICE_PATH="$SYSTEMD_SERVICE_PATH"
+        return
     fi
-    if [ ! -d /run/systemd/system ]; then
-        log_error "This host does not appear to be running systemd"
-        exit 1
+    if command -v rc-service >/dev/null 2>&1 && \
+       command -v rc-update >/dev/null 2>&1 && \
+       command -v supervise-daemon >/dev/null 2>&1 && \
+       [ -x /sbin/openrc-run ]; then
+        SERVICE_MANAGER="openrc"
+        SERVICE_PATH="$OPENRC_SERVICE_PATH"
+        return
     fi
+    log_error "A running systemd or OpenRC service manager is required"
+    exit 1
+}
+
+service_file_mode() {
+    if [ "$SERVICE_MANAGER" = "openrc" ]; then
+        echo 755
+    else
+        echo 644
+    fi
+}
+
+service_reload() {
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        systemctl daemon-reload
+    fi
+}
+
+service_reset_failed() {
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        systemctl reset-failed "$SYSTEMD_SERVICE_NAME"
+    fi
+}
+
+service_is_active() {
+    case "$SERVICE_MANAGER" in
+        systemd) systemctl is-active "$SYSTEMD_SERVICE_NAME" >/dev/null 2>&1 ;;
+        openrc) rc-service --quiet "$SERVICE_NAME" status >/dev/null 2>&1 ;;
+        *) return 1 ;;
+    esac
+}
+
+service_start() {
+    case "$SERVICE_MANAGER" in
+        systemd) systemctl start "$SYSTEMD_SERVICE_NAME" ;;
+        openrc) rc-service "$SERVICE_NAME" start ;;
+    esac
+}
+
+service_stop() {
+    case "$SERVICE_MANAGER" in
+        systemd) systemctl stop "$SYSTEMD_SERVICE_NAME" ;;
+        openrc) rc-service "$SERVICE_NAME" stop ;;
+    esac
+}
+
+service_restart() {
+    case "$SERVICE_MANAGER" in
+        systemd) systemctl restart "$SYSTEMD_SERVICE_NAME" ;;
+        openrc) rc-service "$SERVICE_NAME" restart ;;
+    esac
+}
+
+service_enable() {
+    case "$SERVICE_MANAGER" in
+        systemd) systemctl enable "$SYSTEMD_SERVICE_NAME" ;;
+        openrc) rc-update add "$SERVICE_NAME" default ;;
+    esac
+}
+
+service_disable() {
+    case "$SERVICE_MANAGER" in
+        systemd) systemctl disable "$SYSTEMD_SERVICE_NAME" ;;
+        openrc) rc-update del "$SERVICE_NAME" default ;;
+    esac
+}
+
+service_status() {
+    case "$SERVICE_MANAGER" in
+        systemd) systemctl status "$SYSTEMD_SERVICE_NAME" --no-pager ;;
+        openrc) rc-service "$SERVICE_NAME" status ;;
+    esac
 }
 
 run_with_retry() {
@@ -401,6 +484,9 @@ install_dependencies() {
             else
                 run_with_retry 5 3 yum install -y -q curl wget ca-certificates coreutils >/dev/null 2>&1
             fi
+            ;;
+        alpine)
+            run_with_retry 5 3 apk add --no-cache curl wget ca-certificates coreutils openrc >/dev/null 2>&1
             ;;
         *)
             log_warn "OS ${OS} is not in the official support set; continuing best-effort"
@@ -635,7 +721,57 @@ render_config() {
 }
 
 render_service() {
-    cat >"$TMP_DIR/${SERVICE_NAME}" <<EOF_UNIT
+    if [ "$SERVICE_MANAGER" = "openrc" ]; then
+        cat >"$TMP_DIR/service" <<EOF_OPENRC
+#!/sbin/openrc-run
+
+name="Xboard Node Backend"
+description="YZboard node backend"
+supervisor=supervise-daemon
+command="${BINARY_PATH}"
+command_args="-c ${CONFIG_FILE}"
+directory="${INSTALL_ROOT}"
+pidfile="/run/${SERVICE_NAME}.pid"
+output_log="${OPENRC_LOG_PATH}"
+error_log="${OPENRC_LOG_PATH}"
+respawn_delay=5
+respawn_max=0
+no_new_privs=true
+rc_ulimit="-n 1048576"
+
+depend() {
+    need net
+}
+
+start_pre() {
+    local line key value
+    if [ -r "${CREDENTIALS_FILE}" ]; then
+        while IFS= read -r line || [ -n "\$line" ]; do
+            case "\$line" in
+                ""|\#*) continue ;;
+            esac
+            key=\${line%%=*}
+            if [ "\$key" = "\$line" ]; then
+                eerror "Invalid credentials entry: missing '='"
+                return 1
+            fi
+            case "\$key" in
+                ""|[0-9]*|*[!A-Za-z0-9_]*)
+                    eerror "Invalid credentials key: \$key"
+                    return 1
+                    ;;
+            esac
+            value=\${line#*=}
+            export "\${key}=\${value}"
+        done < "${CREDENTIALS_FILE}"
+    fi
+    checkpath -f -m 0640 -o root:root "${OPENRC_LOG_PATH}"
+}
+EOF_OPENRC
+        return
+    fi
+
+    cat >"$TMP_DIR/service" <<EOF_UNIT
 [Unit]
 Description=Xboard Node Backend
 Documentation=https://github.com/P0me1oo/YZboard-Node
@@ -678,7 +814,7 @@ backup_existing_state() {
         cp "$INSTALL_META" "$BACKUP_PATH/install-meta.json"
     fi
     if [ -f "$SERVICE_PATH" ]; then
-        cp "$SERVICE_PATH" "$BACKUP_PATH/${SERVICE_NAME}"
+        cp "$SERVICE_PATH" "$BACKUP_PATH/service"
         SERVICE_EXISTED=1
     else
         SERVICE_EXISTED=0
@@ -686,8 +822,8 @@ backup_existing_state() {
 }
 
 stop_existing_service() {
-    if [ -f "$SERVICE_PATH" ] || systemctl is-active "$SERVICE_NAME" >/dev/null 2>&1; then
-        systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+    if [ -f "$SERVICE_PATH" ] || service_is_active; then
+        service_stop >/dev/null 2>&1 || true
     fi
 }
 
@@ -702,13 +838,13 @@ install_staged_files() {
     fi
     install -m 755 "$TMP_DIR/xbctl" "$CLI_PATH"
     ln -sf "$CLI_PATH" /usr/bin/xbctl 2>/dev/null || true
-    install -m 644 "$TMP_DIR/${SERVICE_NAME}" "$SERVICE_PATH"
-    systemctl daemon-reload
-    systemctl enable "$SERVICE_NAME" > /dev/null 2>&1
+    install -m "$(service_file_mode)" "$TMP_DIR/service" "$SERVICE_PATH"
+    service_reload
+    service_enable > /dev/null 2>&1
 }
 
 wait_for_health() {
-    if ! systemctl is-active "$SERVICE_NAME" >/dev/null 2>&1; then
+    if ! service_is_active; then
         return 1
     fi
     if [ "$HEALTH_ENABLED" -eq 0 ]; then
@@ -717,7 +853,7 @@ wait_for_health() {
     local attempt=0
     local max_attempts=30
     while [ "$attempt" -lt "$max_attempts" ]; do
-        if ! systemctl is-active "$SERVICE_NAME" >/dev/null 2>&1; then
+        if ! service_is_active; then
             return 1
         fi
         if curl -fsS "http://127.0.0.1:${HEALTH_PORT}/healthz" >/dev/null 2>&1; then
@@ -730,16 +866,18 @@ wait_for_health() {
 }
 
 show_recent_logs() {
-    if command -v journalctl >/dev/null 2>&1; then
-        journalctl -u "$SERVICE_NAME" -n 30 --no-pager || true
+    if [ "$SERVICE_MANAGER" = "systemd" ] && command -v journalctl >/dev/null 2>&1; then
+        journalctl -u "$SYSTEMD_SERVICE_NAME" -n 30 --no-pager || true
+    elif [ "$SERVICE_MANAGER" = "openrc" ] && [ -f "$OPENRC_LOG_PATH" ]; then
+        tail -n 30 "$OPENRC_LOG_PATH" || true
     fi
 }
 
 start_service() {
-    if systemctl is-enabled "$SERVICE_NAME" >/dev/null 2>&1; then
-        systemctl restart "$SERVICE_NAME"
+    if service_is_active; then
+        service_restart
     else
-        systemctl start "$SERVICE_NAME"
+        service_start
     fi
     if ! wait_for_health; then
         log_error "Service failed health check"
@@ -763,7 +901,7 @@ perform_install() {
     start_service
 
     log_info "Installation succeeded"
-    log_info "Service: ${SERVICE_NAME}"
+    log_info "Service: ${SERVICE_NAME} (${SERVICE_MANAGER})"
     log_info "Config: ${CONFIG_FILE}"
     log_info "Credentials: ${CREDENTIALS_FILE}"
     if [ "$HEALTH_ENABLED" -eq 1 ]; then
@@ -789,9 +927,9 @@ perform_upgrade() {
     install -m 755 "$TMP_DIR/xboard-node" "$BINARY_PATH"
     install -m 755 "$TMP_DIR/xbctl" "$CLI_PATH"
     ln -sf "$CLI_PATH" /usr/bin/xbctl 2>/dev/null || true
-    install -m 644 "$TMP_DIR/${SERVICE_NAME}" "$SERVICE_PATH"
-    systemctl daemon-reload
-    systemctl restart "$SERVICE_NAME"
+    install -m "$(service_file_mode)" "$TMP_DIR/service" "$SERVICE_PATH"
+    service_reload
+    service_restart
     if ! wait_for_health; then
         log_error "Upgrade health check failed"
         show_recent_logs
@@ -819,10 +957,10 @@ confirm_uninstall() {
 perform_uninstall() {
     confirm_uninstall
     if [ -f "$SERVICE_PATH" ]; then
-        systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
-        systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
+        service_stop >/dev/null 2>&1 || true
+        service_disable >/dev/null 2>&1 || true
         rm -f "$SERVICE_PATH"
-        systemctl daemon-reload || true
+        service_reload || true
     fi
     rm -f "$BINARY_PATH"
     rm -f "$CLI_PATH"
@@ -858,7 +996,8 @@ perform_status() {
     fi
     if [ -f "$SERVICE_PATH" ]; then
         echo "  service: ${SERVICE_NAME}"
-        systemctl status "$SERVICE_NAME" --no-pager || true
+        echo "  manager: ${SERVICE_MANAGER}"
+        service_status || true
     fi
 }
 
@@ -870,7 +1009,7 @@ main() {
             exit 0
             ;;
         status)
-            ensure_systemd
+            detect_service_manager
             perform_status
             exit 0
             ;;
@@ -879,7 +1018,7 @@ main() {
     check_root
     detect_arch
     detect_os
-    ensure_systemd
+    detect_service_manager
     install_dependencies
 
     case "$ACTION" in

@@ -24,6 +24,7 @@ build-all: build-linux build-linux-arm64
 
 # Run tests
 test:
+	bash tests/install_service_manager_test.sh
 	go test -v -race -count=1 ./...
 
 # Clean build artifacts

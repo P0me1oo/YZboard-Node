@@ -23,7 +23,11 @@ docker run -d --restart=always --network=host \
   ghcr.io/p0me1oo/yzboard-node:v1.13-yz.9
 ```
 
-### Installer (Linux systemd)
+### Installer（Linux systemd / OpenRC）
+
+安装器会自动识别正在运行的服务管理器。Debian、Ubuntu 等 systemd 系统使用
+`xboard-node.service`；Alpine Linux 使用 OpenRC 的 `xboard-node` 服务，并由
+`supervise-daemon` 在进程异常退出后自动拉起。
 
 ```bash
 # Node mode
@@ -65,6 +69,10 @@ xbctl bind add-machine --panel URL --token TOKEN --machine-id 1
 xbctl bind remove-node --panel URL --node-id 1
 xbctl service restart
 ```
+
+`xbctl service status|start|stop|restart|enable|disable|logs` 会使用当前系统的服务管理器。
+systemd 日志由 journal 提供；OpenRC 日志写入 `/var/log/xboard-node.log`。安装、升级、
+卸载和节点绑定变更不需要手工改用 `rc-service` 或 `systemctl`。
 
 安装器和 `xbctl upgrade` 都会从 `P0me1oo/YZboard-Node` 的同一个 GitHub Release 下载与当前架构匹配的 `xboard-node`、`xbctl`，并使用 Release 中的 `SHA256SUMS` 校验文件完整性。面板使用 `releases/latest/download/install.sh` 获取最新正式安装器，不跟随 `master` 或 `dev` 分支。
 
