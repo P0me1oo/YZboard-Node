@@ -6,18 +6,18 @@
 
 | 项目 | 标识 |
 | --- | --- |
-| Node 源码目标版本 | `v1.13-yz.11`（待发布） |
-| Node 发布版本 | `v1.13-yz.10` |
+| Node 源码目标版本 | `v1.13-yz.11`（已发布） |
+| Node 发布版本 | `v1.13-yz.11` |
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.1` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | `82114adc8755ef520df6d99e3cd25a4b97073cec` |
+| Node Release Tag 对应 commit | `911bf1be7b23b6b537e769c9c184069ad69bfbbb` |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
-| Node Release 构建 | GitHub Actions [run 31269894172](https://github.com/P0me1oo/YZboard-Node/actions/runs/31269894172)，由固定 Tag `v1.13-yz.10` 构建 |
-| Node Docker 标签 | `ghcr.io/p0me1oo/yzboard-node:v1.13-yz.10`、`ghcr.io/p0me1oo/yzboard-node:82114adc8755ef520df6d99e3cd25a4b97073cec`、`ghcr.io/p0me1oo/yzboard-node:latest` |
-| Node Docker manifest | OCI index `sha256:48ce4fe3605e2e3aa29292a65fc5003ca2561c098ff3ae87ba85da86a462f1ed`；包含 `linux/amd64` 与 `linux/arm64` |
-| Node Docker OCI 标识 | 两个架构均为 revision `82114adc8755ef520df6d99e3cd25a4b97073cec`、version `v1.13-yz.10` |
-| YZboard 兼容版本 | `1.4.0`（VLESS 落地需要与 `v1.13-yz.10` 成套使用） |
+| Node Release 构建 | GitHub Actions [run 31741878287](https://github.com/P0me1oo/YZboard-Node/actions/runs/31741878287)，由固定 Tag `v1.13-yz.11` 构建 |
+| Node Docker 标签 | `ghcr.io/p0me1oo/yzboard-node:v1.13-yz.11`、`ghcr.io/p0me1oo/yzboard-node:911bf1be7b23b6b537e769c9c184069ad69bfbbb`、`ghcr.io/p0me1oo/yzboard-node:latest` |
+| Node Docker manifest | OCI index `sha256:8e28b01e9340b23fdd99454fa3a657b8cfa67af730c1f9a4c98d7eac1ad3e3e9`；包含 `linux/amd64` 与 `linux/arm64` |
+| Node Docker OCI 标识 | 两个架构均为 revision `911bf1be7b23b6b537e769c9c184069ad69bfbbb`、version `v1.13-yz.11` |
+| YZboard 兼容版本 | `1.4.0`（VLESS 落地需要与 `v1.13-yz.11` 成套使用） |
 | 最近已发布 YZboard 兼容代码 | `cf698392cd0b0623876b5166ab31b10fea2cb889`（面板 `v1.4.0`） |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
@@ -67,6 +67,17 @@ VERSION=v1.13-yz.11 make build-linux
 - Node 自身版本、构建时间和提交短 SHA；
 - Xray 上游 Tag/commit、YZ fork 版本/commit，以及实际模块替换版本；
 - sing-box 请求版本和实际 replacement 版本。
+
+`v1.13-yz.11` Release 资产校验值：
+
+| 资产 | SHA-256 |
+| --- | --- |
+| `xboard-node-linux-amd64` | `a6228fdd6e41f3753934635165a221405ad841cfabf1c3d6558f120df131b92b` |
+| `xboard-node-linux-arm64` | `4874ba28d26cf5f12a0c18cbbab02f440b32218ff173c5a0ec8696fa4bb7e6bf` |
+| `xbctl-linux-amd64` | `a1aa15df6f2f23692227d09e2b2bd17665feea0147f7f6157a83477422bb5fb0` |
+| `xbctl-linux-arm64` | `cb506202d724a55929e7b9ecbbf31e0ad29e008649c0850d158bb08823e1de08` |
+| `install.sh` | `9b685f508ad44ca179914175595fd3bd1c32f1c40ba617177e7807e41317e7ba` |
+| `SHA256SUMS` | `9a657fd90efb1d0ab4122d1562902f2aa0a99e57138d86c25630d35823b38170` |
 
 `v1.13-yz.10` Release 资产校验值：
 
