@@ -280,6 +280,38 @@ func TestReportIncludesBatchID(t *testing.T) {
 	}
 }
 
+func TestReportIncludesExplicitEmptySnapshots(t *testing.T) {
+	var received map[string]interface{}
+	ts, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Errorf("decode report: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	defer ts.Close()
+
+	if err := client.Report(
+		"boot-1-2",
+		nil,
+		nil,
+		map[int][]string{},
+		map[int]int{},
+		0,
+		[2]uint64{},
+		[2]uint64{},
+		[2]uint64{},
+		nil,
+	); err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	if alive, ok := received["alive"].(map[string]interface{}); !ok || len(alive) != 0 {
+		t.Fatalf("alive = %#v, want explicit empty object", received["alive"])
+	}
+	if online, ok := received["online"].(map[string]interface{}); !ok || len(online) != 0 {
+		t.Fatalf("online = %#v, want explicit empty object", received["online"])
+	}
+}
+
 func TestResetETags(t *testing.T) {
 	callCount := 0
 	ts, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {

@@ -239,6 +239,8 @@ func (s *Service) Run(ctx context.Context) (runErr error) {
 	trackTicker := time.NewTicker(time.Duration(s.cfg.Node.TrackInterval) * time.Second)
 	pushInterval := time.Duration(math.Max(float64(s.pushInterval), 5)) * time.Second
 	pullInterval := time.Duration(s.pullInterval) * time.Second
+	wsReconcileInterval := max(pullInterval, 5*time.Minute)
+	lastWSReconcile := time.Now()
 	reportTicker := time.NewTicker(pushInterval)
 	pullTicker := time.NewTicker(pullInterval)
 	deviceReportTicker := time.NewTicker(time.Duration(s.cfg.Node.DeviceReportInterval) * time.Second)
@@ -273,12 +275,15 @@ func (s *Service) Run(ctx context.Context) (runErr error) {
 			s.reportDevices()
 
 		case <-pullTicker.C:
-			// When WebSocket is connected, skip REST polling entirely.
-			// Config/user updates arrive via WS push.
 			if s.wsClient != nil && s.wsClient.IsConnected() {
-				continue
+				if time.Since(lastWSReconcile) < wsReconcileInterval {
+					continue
+				}
+				lastWSReconcile = time.Now()
+				nlog.Core().Debug("periodic REST reconciliation (ws connected)")
+			} else {
+				nlog.Core().Debug("polling from API (ws not connected)")
 			}
-			nlog.Core().Debug("polling from API (ws not connected)")
 			s.pullViaAPIAsync(ctx)
 
 		case result := <-s.pullResults:
@@ -604,17 +609,9 @@ func (s *Service) handleWSEvent(ctx context.Context, event controlplane.Event) {
 			nlog.Core().Warn("ws config validation failed, ignoring update", "error", err)
 			return
 		}
-		// Initialize nodeLog on first config
-		if s.nodeLog == nil {
-			s.nodeLog = nlog.ForNode(event.Config.Protocol, event.Config.ServerPort)
+		if !s.applyConfigUpdate(ctx, event.Config, newConfigHash) {
+			s.resetPollingState()
 		}
-		s.nodeLog.Info(fmt.Sprintf("config updated, %d users", len(event.Users)))
-		s.metricsMu.Lock()
-		s.lastConfig = event.Config
-		s.metricsMu.Unlock()
-		s.lastConfigHash = newConfigHash
-		s.applyRemoteOverrides(ctx, event.Config)
-		s.applyChanges(ctx, true, false)
 
 	case controlplane.EventSyncUsers:
 		if event.Users == nil {
@@ -701,46 +698,49 @@ func (s *Service) pullViaAPIAsync(ctx context.Context) {
 // applyPullResult processes the result of an async pullViaAPI on the main goroutine.
 func (s *Service) applyPullResult(ctx context.Context, result pullResult) {
 	s.wsResyncPending.Store(false)
-	configChanged := false
-
-	if result.certChanged {
-		nlog.Core().Info("certificate renewed, kernel restart needed")
-		configChanged = true
-	}
 
 	if result.config != nil {
 		if err := validateNodeRuntime(s.cfg, s.kernel.Protocols(), result.config, s.cert.TLSCert()); err != nil {
 			nlog.Core().Warn("runtime config validation failed", "error", err)
-			result.config = nil
-		} else {
-			configChanged = true
-			// Initialize or update node logger
-			if s.nodeLog == nil {
-				s.nodeLog = nlog.ForNode(result.config.Protocol, result.config.ServerPort)
-			}
-			s.nodeLog.Info(fmt.Sprintf("config updated, %d users", len(s.lastUsers)))
-			s.metricsMu.Lock()
-			s.lastConfig = result.config
-			s.metricsMu.Unlock()
-			s.lastConfigHash = result.configHash
-			if s.applyRemoteOverrides(ctx, result.config) {
-				configChanged = true
-			}
+			s.resetPollingState()
+			return
 		}
 	}
 
-	if result.users != nil {
-		usersChanged := result.userHash != s.lastUserHash
-
-		if usersChanged && !configChanged {
+	needsReload := result.config != nil || result.certChanged
+	usersChanged := result.users != nil && result.userHash != s.lastUserHash
+	if !needsReload {
+		if usersChanged {
 			s.applyUserUpdate(ctx, result.users, result.userHash)
-		} else if usersChanged {
-			s.updateUserState(result.users)
 		}
+		return
 	}
 
-	if configChanged {
-		s.applyChanges(ctx, true, false)
+	if result.certChanged {
+		nlog.Core().Info("certificate renewed, kernel restart needed")
+	}
+
+	var prevUsers []model.UserSpec
+	var prevUserHash string
+	if usersChanged {
+		prevUsers, prevUserHash = s.prepareUserState(result.users)
+	}
+
+	applied := false
+	if result.config != nil {
+		applied = s.applyConfigUpdate(ctx, result.config, result.configHash)
+	} else {
+		applied = s.applyChanges(ctx, true, false)
+	}
+	if !applied {
+		if usersChanged {
+			s.restoreUserState(prevUsers, prevUserHash)
+		}
+		s.resetPollingState()
+		return
+	}
+	if usersChanged {
+		s.lastUserHash = result.userHash
 	}
 }
 
@@ -785,6 +785,40 @@ func (s *Service) restoreUserState(users []model.UserSpec, hash string) {
 	s.lastUserHash = hash
 }
 
+// applyConfigUpdate 先把配置作为待应用状态交给内核，只有成功后才提交去重哈希。
+func (s *Service) applyConfigUpdate(ctx context.Context, config *model.NodeSpec, hash string) bool {
+	s.metricsMu.RLock()
+	previousConfig := s.lastConfig
+	s.metricsMu.RUnlock()
+	previousHash := s.lastConfigHash
+
+	s.metricsMu.Lock()
+	s.lastConfig = config
+	s.metricsMu.Unlock()
+	s.applyRemoteOverrides(ctx, config)
+
+	if !s.applyChanges(ctx, true, false) {
+		s.metricsMu.Lock()
+		s.lastConfig = previousConfig
+		s.metricsMu.Unlock()
+		s.lastConfigHash = previousHash
+		return false
+	}
+
+	s.lastConfigHash = hash
+	if s.nodeLog == nil {
+		s.nodeLog = nlog.ForNode(config.Protocol, config.ServerPort)
+	}
+	s.nodeLog.Info(fmt.Sprintf("config updated, %d users", len(s.lastUsers)))
+	return true
+}
+
+func (s *Service) resetPollingState() {
+	if resetter, ok := s.source.(controlplane.PollStateResetter); ok {
+		resetter.ResetPollingState()
+	}
+}
+
 // startKernel starts (or restarts) the kernel with the given config/users and
 // records the successfully applied state. Returns false on error.
 func (s *Service) startKernel(nc *model.NodeSpec, users []model.UserSpec) bool {
@@ -825,11 +859,27 @@ func (s *Service) ensureRunning() bool {
 // applyUserUpdate replaces the full user set and hot-swaps the kernel.
 // Called from WS sync.users and REST polling.
 func (s *Service) applyUserUpdate(ctx context.Context, users []model.UserSpec, newHash string) {
+	// 先保存最新用户状态，再尝试启动内核。否则内核停止时
+	// ensureRunning 只能看到旧的空用户列表，会把首个用户更新丢掉。
+	wasRunning := s.kernel.IsRunning()
+	prevUsers, prevHash := s.prepareUserState(users)
 	if !s.ensureRunning() {
+		// 有配置且存在用户（或落地节点）时，ensureRunning 已经尝试过启动。
+		// 启动失败不能把新 hash 留在账面上，否则相同事件会被去重，后续
+		// REST/WS 重试也无法再次拉起内核。
+		startNeeded := s.lastConfig != nil && (len(users) > 0 || s.lastConfig.IsRelayLanding())
+		if !wasRunning && startNeeded {
+			s.restoreUserState(prevUsers, prevHash)
+		}
+		return
+	}
+	if !wasRunning {
+		if newHash != "" {
+			s.lastUserHash = newHash
+		}
 		return
 	}
 
-	prevUsers, prevHash := s.prepareUserState(users)
 	added, removed, err := s.kernel.UpdateUsers(users)
 	if err != nil {
 		nlog.Core().Warn(fmt.Sprintf("UpdateUsers failed, restarting kernel: %v", err))
@@ -847,7 +897,8 @@ func (s *Service) applyUserUpdate(ctx context.Context, users []model.UserSpec, n
 }
 
 // applyUserDelta applies an incremental user change (add or remove) directly
-// via the kernel's atomic user API. Kernel updates run before updateUserState.
+// via the kernel's atomic user API. The latest state is prepared first so a
+// stopped kernel can start as soon as the first user arrives.
 func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers []model.UserSpec) {
 	switch action {
 	case "add":
@@ -855,18 +906,28 @@ func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers 
 		if deltaUsers == nil || len(deltaUsers) == 0 {
 			return
 		}
+		uuidChange := hasUUIDChange(s.lastUsers, deltaUsers)
 		merged := mergeUsers(s.lastUsers, deltaUsers)
-
-		if !s.ensureRunning() {
-			return
-		}
-
-		if hasUUIDChange(s.lastUsers, deltaUsers) {
+		// UUID 变更必须走完整替换，让 applyUserUpdate 保存真正的旧状态，
+		// 这样 UpdateUsers 和重启同时失败时才能正确回滚。
+		if uuidChange {
 			s.applyUserUpdate(ctx, merged, computeUserHash(merged))
 			return
 		}
-
+		wasRunning := s.kernel.IsRunning()
 		prevUsers, prevHash := s.prepareUserState(merged)
+
+		if !s.ensureRunning() {
+			startNeeded := s.lastConfig != nil && (len(merged) > 0 || s.lastConfig.IsRelayLanding())
+			if !wasRunning && startNeeded {
+				s.restoreUserState(prevUsers, prevHash)
+			}
+			return
+		}
+		if !wasRunning {
+			return
+		}
+
 		added, err := s.kernel.AddUsers(deltaUsers)
 		if err != nil {
 			nlog.Core().Warn(fmt.Sprintf("AddUsers failed: %v, falling back to UpdateUsers", err))
@@ -888,12 +949,12 @@ func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers 
 			return
 		}
 		filtered := subtractUsers(s.lastUsers, deltaUsers)
+		prevUsers, prevHash := s.prepareUserState(filtered)
 
 		if !s.kernel.IsRunning() {
 			return
 		}
 
-		prevUsers, prevHash := s.prepareUserState(filtered)
 		removed, err := s.kernel.RemoveUsers(deltaUsers)
 		if err != nil {
 			nlog.Core().Warn(fmt.Sprintf("RemoveUsers failed: %v, falling back to UpdateUsers", err))
@@ -976,9 +1037,9 @@ func subtractUsers(base, delta []model.UserSpec) []model.UserSpec {
 
 // applyChanges applies config changes to the kernel. User-only changes are
 // handled by applyUserUpdate/applyUserDelta directly via the atomic user API.
-func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged bool) {
+func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged bool) bool {
 	if !configChanged {
-		return
+		return true
 	}
 
 	// A landing node serves only the internal transit inbound, so an empty user
@@ -988,9 +1049,10 @@ func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged 
 	if s.lastConfig == nil || (len(s.lastUsers) == 0 && !isLanding) {
 		if len(s.lastUsers) == 0 {
 			s.kernel.Stop()
+			s.appliedState.Config = nil
 			s.appliedState.Users = nil
 		}
-		return
+		return true
 	}
 
 	// If config changed, delegate to kernel.Reload. The kernel implementation
@@ -998,7 +1060,9 @@ func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged 
 	if configChanged && s.kernel.IsRunning() {
 		if err := s.kernel.Reload(s.lastConfig, s.lastUsers, s.cert.TLSCert()); err != nil {
 			nlog.Core().Warn(fmt.Sprintf("reload failed, restarting: %v", err))
-			s.startKernel(s.lastConfig, s.lastUsers)
+			if !s.startKernel(s.lastConfig, s.lastUsers) {
+				return false
+			}
 		} else {
 			s.appliedState.Config = s.lastConfig
 			s.appliedState.Users = s.lastUsers
@@ -1007,12 +1071,17 @@ func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged 
 			}
 		}
 	} else if !s.kernel.IsRunning() {
-		s.startKernel(s.lastConfig, s.lastUsers)
+		if !s.startKernel(s.lastConfig, s.lastUsers) {
+			return false
+		}
 	}
+	return true
 }
 
 func (s *Service) trackAndEnforce(ctx context.Context) {
 	if !s.kernel.IsRunning() {
+		// 内核异常停止时持续使用已确认配置恢复；没有用户的普通节点保持停止。
+		s.ensureRunning()
 		return
 	}
 
@@ -1106,12 +1175,12 @@ func (s *Service) takeReportBatch() *reportBatch {
 			Traffic:      traffic,
 			RelayTraffic: relayTraffic,
 			Alive:        aliveIPs,
-			Online:   s.tracker.CurrentOnline(),
-			CPU:      status.CPU,
-			Mem:      [2]uint64{status.MemTotal, status.MemUsed},
-			Swap:     [2]uint64{status.SwapTotal, status.SwapUsed},
-			Disk:     [2]uint64{status.DiskTotal, status.DiskUsed},
-			Metrics:  metrics,
+			Online:       s.tracker.CurrentOnline(),
+			CPU:          status.CPU,
+			Mem:          [2]uint64{status.MemTotal, status.MemUsed},
+			Swap:         [2]uint64{status.SwapTotal, status.SwapUsed},
+			Disk:         [2]uint64{status.DiskTotal, status.DiskUsed},
+			Metrics:      metrics,
 		},
 	}
 }
@@ -1170,9 +1239,6 @@ func cloneTraffic(src map[int][2]int64) map[int][2]int64 {
 }
 
 func cloneAliveIPs(src map[int][]string) map[int][]string {
-	if len(src) == 0 {
-		return nil
-	}
 	dst := make(map[int][]string, len(src))
 	for uid, ips := range src {
 		dst[uid] = append([]string(nil), ips...)
@@ -1298,11 +1364,6 @@ func (s *Service) sendDeviceBatch() {
 	}
 
 	devices := s.tracker.FlushAliveIPs()
-	// FlushAliveIPs returns nil if no changes since last flush
-	if devices == nil {
-		nlog.Core().Debug("device snapshot unchanged, skipping")
-		return
-	}
 	s.sink.ReportDevices(s.wsClient, devices)
 	nlog.Core().Debug("device snapshot sent", "users", len(devices))
 }

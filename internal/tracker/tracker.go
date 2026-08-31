@@ -1,9 +1,6 @@
 package tracker
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -54,13 +51,6 @@ type Tracker struct {
 	// live holds the current snapshot, swapped atomically.
 	// Readers load this pointer without any lock.
 	live atomic.Pointer[snapshot]
-
-	// aliveIPsBuf is a reusable buffer for FlushAliveIPs output.
-	// Avoids allocating a new map+slice every 60s.
-	aliveIPsBuf map[int][]string
-
-	// lastAliveIPsHash detects changes to avoid duplicate reports.
-	lastAliveIPsHash string
 }
 
 func New() *Tracker {
@@ -69,7 +59,6 @@ func New() *Tracker {
 		pendingTraffic: make(map[int][2]int64),
 		lastSeenRelay:  make(map[int][2]int64),
 		pendingRelay:   make(map[int][2]int64),
-		aliveIPsBuf:    make(map[int][]string),
 	}
 	// Publish initial empty snapshot.
 	t.live.Store(&snapshot{
@@ -167,77 +156,19 @@ func (t *Tracker) HasTraffic() bool {
 	return len(t.pendingTraffic) > 0
 }
 
-// FlushAliveIPs returns per-user alive IPs.
-// Reuses internal buffer. Returns nil if unchanged.
+// FlushAliveIPs 返回当前权威设备快照。每次都返回完整副本，包括空快照，
+// 让面板能够续期稳定在线设备并清理已经离线的用户。
 func (t *Tracker) FlushAliveIPs() map[int][]string {
 	s := t.live.Load()
-
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	// Calculate hash of current aliveIPs
-	currentHash := calcAliveIPsHash(s.aliveIPs)
-
-	// If no changes, return nil to avoid duplicate reporting
-	if currentHash == t.lastAliveIPsHash {
-		return nil
-	}
-
-	t.lastAliveIPsHash = currentHash
-
-	// Clear old buffer entries.
-	for k := range t.aliveIPsBuf {
-		delete(t.aliveIPsBuf, k)
-	}
-
-	// Fill buffer from snapshot.
+	devices := make(map[int][]string, len(s.aliveIPs))
 	for uid, ips := range s.aliveIPs {
-		buf := t.aliveIPsBuf[uid]
-		if buf == nil {
-			buf = make([]string, 0, len(ips))
-		}
-		buf = buf[:0]
+		buf := make([]string, 0, len(ips))
 		for ip := range ips {
 			buf = append(buf, ip)
 		}
-		t.aliveIPsBuf[uid] = buf
+		devices[uid] = buf
 	}
-
-	return t.aliveIPsBuf
-}
-
-// calcAliveIPsHash computes a deterministic hash for change detection.
-func calcAliveIPsHash(aliveIPs map[int]map[string]bool) string {
-	if len(aliveIPs) == 0 {
-		return ""
-	}
-
-	h := sha256.New()
-
-	// Sort user IDs for consistent hashing
-	userIDs := make([]int, 0, len(aliveIPs))
-	for uid := range aliveIPs {
-		userIDs = append(userIDs, uid)
-	}
-	sort.Ints(userIDs)
-
-	for _, uid := range userIDs {
-		ips := aliveIPs[uid]
-		// Sort IPs for consistent hashing
-		ipList := make([]string, 0, len(ips))
-		for ip := range ips {
-			ipList = append(ipList, ip)
-		}
-		sort.Strings(ipList)
-
-		// Write user ID and IPs to hash
-		h.Write([]byte{byte(uid >> 24), byte(uid >> 16), byte(uid >> 8), byte(uid)})
-		for _, ip := range ipList {
-			h.Write([]byte(ip))
-		}
-	}
-
-	return hex.EncodeToString(h.Sum(nil))
+	return devices
 }
 
 // CurrentOnline returns a snapshot copy of user_id → device count (distinct IPs).
@@ -249,31 +180,6 @@ func (t *Tracker) CurrentOnline() map[int]int {
 		cp[k] = v
 	}
 	return cp
-}
-
-// RestoreAliveIPs merges alive IPs back in (used when push to panel fails).
-// Note: this operates on the buffer, which will be overwritten next Process().
-func (t *Tracker) RestoreAliveIPs(data map[int][]string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for uid, ipList := range data {
-		ips := t.aliveIPsBuf[uid]
-		if ips == nil {
-			ips = make([]string, 0, len(ipList))
-		}
-		// Use map for O(n) dedup instead of O(n²) linear search
-		existMap := make(map[string]struct{}, len(ips)+len(ipList))
-		for _, existing := range ips {
-			existMap[existing] = struct{}{}
-		}
-		for _, ip := range ipList {
-			if _, exists := existMap[ip]; !exists {
-				ips = append(ips, ip)
-				existMap[ip] = struct{}{}
-			}
-		}
-		t.aliveIPsBuf[uid] = ips
-	}
 }
 
 // LogStats logs current tracking statistics.

@@ -48,6 +48,11 @@ type Snapshot struct {
 	Users  []model.UserSpec
 }
 
+// PollStateResetter 强制下一次 REST 对账返回完整配置和用户快照。
+type PollStateResetter interface {
+	ResetPollingState()
+}
+
 type ReportPayload struct {
 	// ReportID 标识一次刷出的报告批次，失败重试时复用同一 ID。
 	// 为空时兼容未提供批次标识的旧调用方。

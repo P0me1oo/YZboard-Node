@@ -49,6 +49,13 @@ func (p *PanelControlPlane) Initial(ctx context.Context, metricsFn func() map[st
 	}
 
 	nlog.Core().Info("websocket disabled, using REST API")
+	configETag, userETag := p.client.ETags()
+	committed := false
+	defer func() {
+		if !committed {
+			p.client.RestoreETags(configETag, userETag)
+		}
+	}()
 	configSnapshot, err := p.client.GetConfig()
 	if err != nil {
 		return Bootstrap{}, fmt.Errorf("initial config fetch: %w", err)
@@ -65,10 +72,19 @@ func (p *PanelControlPlane) Initial(ctx context.Context, metricsFn func() map[st
 		return Bootstrap{}, fmt.Errorf("initial config normalize: %w", err)
 	}
 	bootstrap.Users = model.UserSpecsFromPanel(users)
+	committed = true
 	return bootstrap, nil
 }
 
 func (p *PanelControlPlane) Poll(ctx context.Context) (Snapshot, error) {
+	configETag, userETag := p.client.ETags()
+	committed := false
+	defer func() {
+		if !committed {
+			p.client.RestoreETags(configETag, userETag)
+		}
+	}()
+
 	configSnapshot, err := p.client.GetConfig()
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("poll config: %w", err)
@@ -82,11 +98,19 @@ func (p *PanelControlPlane) Poll(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, ctx.Err()
 	default:
 	}
-	nodeSpec, err := model.NodeSpecFromPanelValidated(configSnapshot, p.kcfg)
-	if err != nil {
-		return Snapshot{}, fmt.Errorf("poll config normalize: %w", err)
+	var nodeSpec *model.NodeSpec
+	if configSnapshot != nil {
+		nodeSpec, err = model.NodeSpecFromPanelValidated(configSnapshot, p.kcfg)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("poll config normalize: %w", err)
+		}
 	}
+	committed = true
 	return Snapshot{Config: nodeSpec, Users: model.UserSpecsFromPanel(users)}, nil
+}
+
+func (p *PanelControlPlane) ResetPollingState() {
+	p.client.ResetETags()
 }
 
 func (p *PanelControlPlane) Discover(ctx context.Context, metricsFn func() map[string]interface{}, events chan<- Event, statuses chan<- StatusChange) (PushClient, error) {

@@ -65,6 +65,14 @@ func (p *MachinePanelControlPlane) Initial(
 		bootstrap.PullInterval = hs.Settings.PullInterval
 	}
 
+	configETag, userETag := p.client.ETags()
+	committed := false
+	defer func() {
+		if !committed {
+			p.client.RestoreETags(configETag, userETag)
+		}
+	}()
+
 	configSnapshot, err := p.client.GetConfig()
 	if err != nil {
 		return Bootstrap{}, fmt.Errorf("machine initial config: %w", err)
@@ -81,6 +89,7 @@ func (p *MachinePanelControlPlane) Initial(
 		return Bootstrap{}, fmt.Errorf("machine initial config normalize: %w", err)
 	}
 	bootstrap.Users = model.UserSpecsFromPanel(users)
+	committed = true
 
 	// Register mailbox access after the initial snapshot is prepared, so the
 	// Service can start the kernel immediately and only then drain coalesced WS
@@ -96,6 +105,14 @@ func (p *MachinePanelControlPlane) Initial(
 }
 
 func (p *MachinePanelControlPlane) Poll(ctx context.Context) (Snapshot, error) {
+	configETag, userETag := p.client.ETags()
+	committed := false
+	defer func() {
+		if !committed {
+			p.client.RestoreETags(configETag, userETag)
+		}
+	}()
+
 	configSnapshot, err := p.client.GetConfig()
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("machine poll config: %w", err)
@@ -109,11 +126,19 @@ func (p *MachinePanelControlPlane) Poll(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, ctx.Err()
 	default:
 	}
-	nodeSpec, err := model.NodeSpecFromPanelValidated(configSnapshot, p.kcfg)
-	if err != nil {
-		return Snapshot{}, fmt.Errorf("machine poll normalize: %w", err)
+	var nodeSpec *model.NodeSpec
+	if configSnapshot != nil {
+		nodeSpec, err = model.NodeSpecFromPanelValidated(configSnapshot, p.kcfg)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("machine poll normalize: %w", err)
+		}
 	}
+	committed = true
 	return Snapshot{Config: nodeSpec, Users: model.UserSpecsFromPanel(users)}, nil
+}
+
+func (p *MachinePanelControlPlane) ResetPollingState() {
+	p.client.ResetETags()
 }
 
 func (p *MachinePanelControlPlane) Discover(

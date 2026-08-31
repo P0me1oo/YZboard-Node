@@ -39,6 +39,81 @@ func TestPanelControlPlanePollRejectsInvalidCustomOutbounds(t *testing.T) {
 	}
 }
 
+func TestPanelControlPlanePollRestoresETagsWhenUsersFail(t *testing.T) {
+	configCalls := 0
+	userCalls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/server/UniProxy/config", func(w http.ResponseWriter, r *http.Request) {
+		configCalls++
+		if configCalls == 2 && r.Header.Get("If-None-Match") != "" {
+			t.Fatalf("second config request reused uncommitted ETag %q", r.Header.Get("If-None-Match"))
+		}
+		w.Header().Set("ETag", `"config-v2"`)
+		_, _ = w.Write([]byte(`{"protocol":"shadowsocks","server_port":8388}`))
+	})
+	mux.HandleFunc("/api/v1/server/UniProxy/user", func(w http.ResponseWriter, r *http.Request) {
+		userCalls++
+		if userCalls == 1 {
+			http.Error(w, "temporary failure", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("ETag", `"users-v2"`)
+		_, _ = w.Write([]byte(`{"users":[]}`))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	cp := NewPanelControlPlane(config.PanelConfig{URL: server.URL, Token: "token", NodeID: 1}, config.WSConfig{}, config.KernelConfig{Type: "singbox"})
+	if _, err := cp.Poll(context.Background()); err == nil {
+		t.Fatal("expected first poll to fail")
+	}
+	snapshot, err := cp.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("second poll failed: %v", err)
+	}
+	if snapshot.Config == nil || snapshot.Config.ServerPort != 8388 {
+		t.Fatalf("unexpected snapshot: %#v", snapshot.Config)
+	}
+}
+
+func TestPanelControlPlanePollAcceptsNotModifiedSnapshot(t *testing.T) {
+	configCalls := 0
+	userCalls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/server/UniProxy/config", func(w http.ResponseWriter, r *http.Request) {
+		configCalls++
+		if configCalls > 1 {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", `"config-v1"`)
+		_, _ = w.Write([]byte(`{"protocol":"shadowsocks","server_port":8388}`))
+	})
+	mux.HandleFunc("/api/v1/server/UniProxy/user", func(w http.ResponseWriter, r *http.Request) {
+		userCalls++
+		if userCalls > 1 {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", `"users-v1"`)
+		_, _ = w.Write([]byte(`{"users":[]}`))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	cp := NewPanelControlPlane(config.PanelConfig{URL: server.URL, Token: "token", NodeID: 1}, config.WSConfig{}, config.KernelConfig{Type: "singbox"})
+	if _, err := cp.Poll(context.Background()); err != nil {
+		t.Fatalf("first poll failed: %v", err)
+	}
+	snapshot, err := cp.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("304 poll failed: %v", err)
+	}
+	if snapshot.Config != nil || snapshot.Users != nil {
+		t.Fatalf("expected unchanged snapshot, got %#v", snapshot)
+	}
+}
+
 func TestTranslateWSEventRejectsInvalidCustomOutbounds(t *testing.T) {
 	_, err := TranslateWSEvent(panelapi.WSEvent{
 		Type: panelapi.WSEventSyncConfig,

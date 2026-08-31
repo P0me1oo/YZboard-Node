@@ -141,6 +141,8 @@ type ConnTracker struct {
 	globalLastUpdate time.Time
 }
 
+const globalDeviceStateTTL = 2 * time.Minute
+
 // NewConnTracker creates a tracker.
 func NewConnTracker(_ int) *ConnTracker {
 	return &ConnTracker{
@@ -332,7 +334,7 @@ func (t *ConnTracker) checkDeviceGate(us *userStats, userID int, sourceIP string
 
 	// Check global state freshness
 	t.globalMu.RLock()
-	globalStale := time.Since(t.globalLastUpdate) > 60*time.Second
+	globalStale := time.Since(t.globalLastUpdate) > globalDeviceStateTTL
 	globalIPs := t.globalDevices[userID]
 	t.globalMu.RUnlock()
 

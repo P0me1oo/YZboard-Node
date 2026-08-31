@@ -20,7 +20,7 @@ Node backend for [YZboard](https://github.com/P0me1oo/YZboard). Supports `sing-b
 ```bash
 docker run -d --restart=always --network=host \
   -e apiHost=https://panel.com -e apiKey=TOKEN -e nodeID=1 \
-  ghcr.io/p0me1oo/yzboard-node:v1.13-yz.11
+  ghcr.io/p0me1oo/yzboard-node:v1.13-yz.13
 ```
 
 ### Installer（Linux systemd / OpenRC）

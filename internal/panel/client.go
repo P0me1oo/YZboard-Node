@@ -38,6 +38,7 @@ type Client struct {
 
 	configETag string
 	userETag   string
+	etagMu     sync.Mutex
 
 	apiSuccess atomic.Uint64
 	apiFailure atomic.Uint64
@@ -79,7 +80,24 @@ func (c *Client) ForNode(nodeID int) *Client {
 // returns a full response instead of 304. Used by machine mode after a
 // pre-fetch to probe the transport type.
 func (c *Client) ResetConfigETag() {
+	c.etagMu.Lock()
+	defer c.etagMu.Unlock()
 	c.configETag = ""
+}
+
+// ETags 返回当前已提交的条件请求标识，供一次完整同步失败时回滚。
+func (c *Client) ETags() (configETag, userETag string) {
+	c.etagMu.Lock()
+	defer c.etagMu.Unlock()
+	return c.configETag, c.userETag
+}
+
+// RestoreETags 恢复上一次完整同步前的条件请求标识。
+func (c *Client) RestoreETags(configETag, userETag string) {
+	c.etagMu.Lock()
+	c.configETag = configETag
+	c.userETag = userETag
+	c.etagMu.Unlock()
 }
 
 // Handshake calls the new v2 API to get WS config + initial data in one shot.
@@ -141,7 +159,7 @@ func (c *Client) Report(reportID string, traffic map[int][2]int64, relayTraffic 
 		}()
 	}
 
-	if len(alive) > 0 {
+	if alive != nil {
 		a := aliveMapPool.Get().(map[string][]string)
 		for uid, ips := range alive {
 			a[strconv.Itoa(uid)] = ips
@@ -155,7 +173,7 @@ func (c *Client) Report(reportID string, traffic map[int][2]int64, relayTraffic 
 		}()
 	}
 
-	if len(online) > 0 {
+	if online != nil {
 		o := onlineMapPool.Get().(map[string]int)
 		for uid, count := range online {
 			o[strconv.Itoa(uid)] = count
@@ -232,7 +250,8 @@ func (c *Client) userPath() string {
 
 // GetConfig fetches node configuration. Returns nil if not modified (304).
 func (c *Client) GetConfig() (*NodeConfig, error) {
-	resp, err := c.doRequest("GET", c.configPath(), nil, c.configETag)
+	configETag, _ := c.ETags()
+	resp, err := c.doRequest("GET", c.configPath(), nil, configETag)
 	if err != nil {
 		return nil, fmt.Errorf("get config: %w", err)
 	}
@@ -263,14 +282,17 @@ func (c *Client) GetConfig() (*NodeConfig, error) {
 	}
 
 	if etag := resp.Header.Get("ETag"); etag != "" {
+		c.etagMu.Lock()
 		c.configETag = etag
+		c.etagMu.Unlock()
 	}
 	return &cfg, nil
 }
 
 // GetUsers fetches available users. Returns nil if not modified (304).
 func (c *Client) GetUsers() ([]User, error) {
-	resp, err := c.doRequest("GET", c.userPath(), nil, c.userETag)
+	_, userETag := c.ETags()
+	resp, err := c.doRequest("GET", c.userPath(), nil, userETag)
 	if err != nil {
 		return nil, fmt.Errorf("get users: %w", err)
 	}
@@ -290,7 +312,9 @@ func (c *Client) GetUsers() ([]User, error) {
 	}
 
 	if etag := resp.Header.Get("ETag"); etag != "" {
+		c.etagMu.Lock()
 		c.userETag = etag
+		c.etagMu.Unlock()
 	}
 	return usersResp.Users, nil
 }
@@ -332,6 +356,8 @@ func (c *Client) PushStatus(cpu float64, mem, swap, disk [2]uint64) error {
 
 // ResetETags clears cached ETags, forcing full responses
 func (c *Client) ResetETags() {
+	c.etagMu.Lock()
+	defer c.etagMu.Unlock()
 	c.configETag = ""
 	c.userETag = ""
 }
