@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/cedar2025/xboard-node/internal/buildinfo"
 	"github.com/cedar2025/xboard-node/internal/config"
+	"github.com/cedar2025/xboard-node/internal/timesync"
 	"gopkg.in/yaml.v3"
 )
 
@@ -49,28 +51,30 @@ type instanceRow struct {
 }
 
 type fileRootConfig struct {
-	Log       *fileLogConfig     `yaml:"log,omitempty"`
-	Kernel    *fileKernelConfig  `yaml:"kernel,omitempty"`
-	Node      *fileNodeConfig    `yaml:"node,omitempty"`
-	WS        *config.WSConfig   `yaml:"ws,omitempty"`
-	Runtime   *fileRuntimeConfig `yaml:"runtime,omitempty"`
-	Cert      *config.CertConfig `yaml:"cert,omitempty"`
-	Instances []fileInstance     `yaml:"instances,omitempty"`
+	Log       *fileLogConfig         `yaml:"log,omitempty"`
+	Kernel    *fileKernelConfig      `yaml:"kernel,omitempty"`
+	Node      *fileNodeConfig        `yaml:"node,omitempty"`
+	WS        *config.WSConfig       `yaml:"ws,omitempty"`
+	Runtime   *fileRuntimeConfig     `yaml:"runtime,omitempty"`
+	Cert      *config.CertConfig     `yaml:"cert,omitempty"`
+	TimeSync  *config.TimeSyncConfig `yaml:"time_sync,omitempty"`
+	Instances []fileInstance         `yaml:"instances,omitempty"`
 }
 
 type fileInstance struct {
-	ID         string             `yaml:"id,omitempty"`
-	Panel      filePanelConfig    `yaml:"panel"`
-	Node       *fileNodeConfig    `yaml:"node,omitempty"`
-	Kernel     fileKernelConfig   `yaml:"kernel"`
-	Log        fileLogConfig      `yaml:"log"`
-	Runtime    *fileRuntimeConfig `yaml:"runtime,omitempty"`
-	HealthPort int                `yaml:"health_port,omitempty"`
-	Machine    *fileMachineConfig `yaml:"machine,omitempty"`
-	Standalone map[string]any     `yaml:"standalone,omitempty"`
-	Cert       *config.CertConfig `yaml:"cert,omitempty"`
-	WS         *config.WSConfig   `yaml:"ws,omitempty"`
-	Nodes      []config.NodeEntry `yaml:"nodes,omitempty"`
+	ID         string                 `yaml:"id,omitempty"`
+	Panel      filePanelConfig        `yaml:"panel"`
+	Node       *fileNodeConfig        `yaml:"node,omitempty"`
+	Kernel     fileKernelConfig       `yaml:"kernel"`
+	Log        fileLogConfig          `yaml:"log"`
+	Runtime    *fileRuntimeConfig     `yaml:"runtime,omitempty"`
+	HealthPort int                    `yaml:"health_port,omitempty"`
+	Machine    *fileMachineConfig     `yaml:"machine,omitempty"`
+	Standalone map[string]any         `yaml:"standalone,omitempty"`
+	Cert       *config.CertConfig     `yaml:"cert,omitempty"`
+	WS         *config.WSConfig       `yaml:"ws,omitempty"`
+	TimeSync   *config.TimeSyncConfig `yaml:"time_sync,omitempty"`
+	Nodes      []config.NodeEntry     `yaml:"nodes,omitempty"`
 }
 
 type filePanelConfig struct {
@@ -168,6 +172,8 @@ func run(args []string) error {
 		return runService([]string{"logs"})
 	case "health":
 		return runHealth()
+	case "doctor":
+		return runDoctor(args[1:])
 	case "bind":
 		return runBind(args[1:])
 	case "bind-node":
@@ -209,6 +215,7 @@ func printUsage() {
   xbctl config kernel <xray|singbox> [--instance ID] [--config PATH] [--force]
   xbctl service status|start|stop|restart|enable|disable|logs
   xbctl health
+  xbctl doctor time [--config PATH] [--output text|json]
   xbctl bind add-node --panel-url URL --token TOKEN --node-id ID [--node-type TYPE] [--kernel singbox|xray]
   xbctl bind add-machine --panel-url URL --token TOKEN --machine-id ID [--kernel singbox|xray]
   xbctl bind remove <instance-id>
@@ -305,6 +312,136 @@ func runHealth() error {
 	if h == "down" {
 		return errors.New("health check failed")
 	}
+	return nil
+}
+
+type timeDoctorResult struct {
+	ConfiguredEnabled bool              `json:"configured_enabled"`
+	Servers           []string          `json:"servers"`
+	Probe             timesync.Snapshot `json:"probe"`
+}
+
+func runDoctor(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: xbctl doctor time [--config PATH] [--output text|json]")
+	}
+	switch args[0] {
+	case "time":
+		return runDoctorTime(args[1:])
+	default:
+		return fmt.Errorf("unknown doctor command: %s", args[0])
+	}
+}
+
+func runDoctorTime(args []string) error {
+	configPath := defaultConfigPath
+	output := "text"
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--config":
+			if i+1 >= len(args) {
+				return errors.New("--config requires a path")
+			}
+			i++
+			configPath = args[i]
+		case "--output":
+			if i+1 >= len(args) {
+				return errors.New("--output requires text or json")
+			}
+			i++
+			output = strings.ToLower(strings.TrimSpace(args[i]))
+			if output != "text" && output != "json" {
+				return fmt.Errorf("output must be text or json, got %q", output)
+			}
+		default:
+			return fmt.Errorf("unknown doctor time flag: %s", args[i])
+		}
+	}
+
+	timeConfig, configuredEnabled, err := loadDoctorTimeConfig(configPath)
+	if err != nil {
+		return err
+	}
+	// doctor 始终执行只读探测，即使运行时自动校准被显式关闭。
+	probeEnabled := true
+	timeConfig.Enabled = &probeEnabled
+	manager := timesync.New(timeConfig)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeConfig.Timeout+1)*time.Second)
+	defer cancel()
+	snapshot, probeErr := manager.Check(ctx)
+	result := timeDoctorResult{
+		ConfiguredEnabled: configuredEnabled,
+		Servers:           append([]string(nil), timeConfig.Servers...),
+		Probe:             snapshot,
+	}
+	if err := printTimeDoctor(os.Stdout, output, result); err != nil {
+		return err
+	}
+	if probeErr != nil {
+		return fmt.Errorf("time check failed: %w", probeErr)
+	}
+	if snapshot.Status != timesync.StatusNormal {
+		return fmt.Errorf("time check status is %s (offset %d ms)", snapshot.Status, snapshot.OffsetMS)
+	}
+	return nil
+}
+
+func loadDoctorTimeConfig(path string) (config.TimeSyncConfig, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return config.TimeSyncConfig{}, false, fmt.Errorf("read config: %w", err)
+	}
+	root := &config.RootConfig{}
+	if err := yaml.Unmarshal(data, root); err != nil {
+		return config.TimeSyncConfig{}, false, fmt.Errorf("parse config: %w", err)
+	}
+	if len(root.Instances) == 0 {
+		resolved := config.ResolveTimeSync(root.Config.TimeSync, config.TimeSyncConfig{})
+		if err := config.ValidateTimeSync(resolved); err != nil {
+			return config.TimeSyncConfig{}, false, err
+		}
+		return resolved, resolved.IsEnabled(), nil
+	}
+	resolved := config.ResolveTimeSync(root.Instances[0].TimeSync, root.Config.TimeSync)
+	if err := config.ValidateTimeSync(resolved); err != nil {
+		return config.TimeSyncConfig{}, false, err
+	}
+	for i := 1; i < len(root.Instances); i++ {
+		other := config.ResolveTimeSync(root.Instances[i].TimeSync, root.Config.TimeSync)
+		if err := config.ValidateTimeSync(other); err != nil {
+			return config.TimeSyncConfig{}, false, fmt.Errorf("instances[%d]: %w", i, err)
+		}
+		if !resolved.Equal(other) {
+			return config.TimeSyncConfig{}, false, fmt.Errorf("time_sync differs between instances[0] and instances[%d]", i)
+		}
+	}
+	return resolved, resolved.IsEnabled(), nil
+}
+
+func printTimeDoctor(w io.Writer, output string, result timeDoctorResult) error {
+	if output == "json" {
+		encoder := json.NewEncoder(w)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(result)
+	}
+	configured := "enabled"
+	if !result.ConfiguredEnabled {
+		configured = "disabled"
+	}
+	fmt.Fprintln(w, "time sync doctor")
+	fmt.Fprintf(w, "  configured: %s\n", configured)
+	fmt.Fprintf(w, "  status:     %s\n", result.Probe.Status)
+	fmt.Fprintf(w, "  offset:     %d ms\n", result.Probe.OffsetMS)
+	if result.Probe.Source != "" {
+		fmt.Fprintf(w, "  source:     %s\n", result.Probe.Source)
+	}
+	if result.Probe.LastSuccess != nil {
+		fmt.Fprintf(w, "  checked_at: %s\n", result.Probe.LastSuccess.UTC().Format(time.RFC3339))
+	}
+	if result.Probe.LastError != "" {
+		fmt.Fprintf(w, "  error:      %s\n", result.Probe.LastError)
+	}
+	fmt.Fprintf(w, "  servers:    %s\n", strings.Join(result.Servers, ", "))
 	return nil
 }
 
@@ -939,6 +1076,9 @@ func writeRootConfig(path string, root *config.RootConfig) error {
 	if p.Cert.CertMode != "" || p.Cert.Domain != "" || p.Cert.CertFile != "" || p.Cert.AutoTLS {
 		out.Cert = &p.Cert
 	}
+	if hasTimeSyncConfig(p.TimeSync) {
+		out.TimeSync = &p.TimeSync
+	}
 
 	for _, inst := range instances {
 		fi := fileInstance{
@@ -993,6 +1133,9 @@ func writeRootConfig(path string, root *config.RootConfig) error {
 		if inst.WS.StatusInterval != 0 || inst.WS.HandshakeTimeout != 0 || inst.WS.BackoffInitial != 0 {
 			fi.WS = &inst.WS
 		}
+		if hasTimeSyncConfig(inst.TimeSync) {
+			fi.TimeSync = &inst.TimeSync
+		}
 		if len(inst.Nodes) > 0 {
 			fi.Nodes = inst.Nodes
 		}
@@ -1003,6 +1146,11 @@ func writeRootConfig(path string, root *config.RootConfig) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 	return os.WriteFile(path, data, 0o600)
+}
+
+func hasTimeSyncConfig(cfg config.TimeSyncConfig) bool {
+	return cfg.Enabled != nil || len(cfg.Servers) > 0 || cfg.Interval != 0 || cfg.Timeout != 0 ||
+		cfg.WarnOffset != 0 || cfg.ErrorOffset != 0 || cfg.CriticalOffset != 0
 }
 
 func pruneCredentialKeys(path string, removed []config.Config) error {

@@ -15,6 +15,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/auth"
 	singJSON "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/ntp"
 	"github.com/sagernet/sing/service"
 	"golang.org/x/time/rate"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/cedar2025/xboard-node/internal/kernel"
 	"github.com/cedar2025/xboard-node/internal/model"
 	"github.com/cedar2025/xboard-node/internal/nlog"
+	"github.com/cedar2025/xboard-node/internal/timesync"
 )
 
 // drainTimeout is how long stop() waits for in-flight connections to finish
@@ -103,6 +105,7 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = include.Context(ctx)
+	service.MustRegister[ntp.TimeService](ctx, timesync.Default())
 
 	opts, err := singJSON.UnmarshalExtendedContext[option.Options](ctx, data)
 	if err != nil {

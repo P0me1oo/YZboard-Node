@@ -27,6 +27,7 @@ import (
 	"github.com/cedar2025/xboard-node/internal/model"
 	"github.com/cedar2025/xboard-node/internal/monitor"
 	"github.com/cedar2025/xboard-node/internal/nlog"
+	"github.com/cedar2025/xboard-node/internal/timesync"
 	"github.com/cedar2025/xboard-node/internal/tracker"
 )
 
@@ -81,11 +82,12 @@ type Service struct {
 
 	// reportMu 保护失败的报告批次。HTTP 请求可能已到达面板后才断开连接；
 	// 保留完整批次和 report ID，可让面板丢弃重试而不丢失请求期间产生的新流量。
-	reportMu    sync.Mutex
-	retryReport *reportBatch
-	reportBoot  string
-	reportSeq   atomic.Uint64
-	status      func(RuntimeStatus)
+	reportMu     sync.Mutex
+	retryReport  *reportBatch
+	reportBoot   string
+	reportSeq    atomic.Uint64
+	status       func(RuntimeStatus)
+	timeConsumer string
 }
 
 type RuntimeStatus string
@@ -201,6 +203,7 @@ func newService(cfg *config.Config, cp controlplane.ControlPlane) *Service {
 		wsStatusCh:   make(chan controlplane.StatusChange, 4),
 		pullResults:  make(chan pullResult, 1),
 		reportBoot:   newReportBootID(),
+		timeConsumer: fmt.Sprintf("%s/node/%d", cfg.InstanceID, cfg.Panel.NodeID),
 	}
 }
 
@@ -215,6 +218,7 @@ func newReportBootID() string {
 
 func (s *Service) Run(ctx context.Context) (runErr error) {
 	s.notifyStatus(RuntimeStarting)
+	defer timesync.Default().SetUsage(s.timeConsumer, false)
 	defer func() {
 		if runErr != nil {
 			s.notifyStatus(RuntimeFailed)
@@ -351,6 +355,7 @@ func (s *Service) initialSetup(ctx context.Context) error {
 	if err := validateNodeRuntime(s.cfg, s.kernel.Protocols(), bootstrap.Config, s.cert.TLSCert()); err != nil {
 		return err
 	}
+	s.setTimeUsage(bootstrap.Config)
 
 	s.metricsMu.Lock()
 	s.lastConfig = bootstrap.Config
@@ -791,10 +796,12 @@ func (s *Service) applyConfigUpdate(ctx context.Context, config *model.NodeSpec,
 	previousConfig := s.lastConfig
 	s.metricsMu.RUnlock()
 	previousHash := s.lastConfigHash
+	previousUsesSS2022 := previousConfig != nil && previousConfig.UsesSS2022()
 
 	s.metricsMu.Lock()
 	s.lastConfig = config
 	s.metricsMu.Unlock()
+	s.setTimeUsage(config)
 	s.applyRemoteOverrides(ctx, config)
 
 	if !s.applyChanges(ctx, true, false) {
@@ -802,6 +809,7 @@ func (s *Service) applyConfigUpdate(ctx context.Context, config *model.NodeSpec,
 		s.lastConfig = previousConfig
 		s.metricsMu.Unlock()
 		s.lastConfigHash = previousHash
+		timesync.Default().SetUsage(s.timeConsumer, previousUsesSS2022)
 		return false
 	}
 
@@ -811,6 +819,10 @@ func (s *Service) applyConfigUpdate(ctx context.Context, config *model.NodeSpec,
 	}
 	s.nodeLog.Info(fmt.Sprintf("config updated, %d users", len(s.lastUsers)))
 	return true
+}
+
+func (s *Service) setTimeUsage(config *model.NodeSpec) {
+	timesync.Default().SetUsage(s.timeConsumer, config != nil && config.UsesSS2022())
 }
 
 func (s *Service) resetPollingState() {

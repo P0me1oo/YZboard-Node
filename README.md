@@ -12,6 +12,7 @@ Node backend for [YZboard](https://github.com/P0me1oo/YZboard). Supports `sing-b
 - Deploy modes: node mode, machine mode, standalone mode
 - Multi-instance: single process binding multiple panels / nodes
 - Relay: VLESS entry with Shadowsocks or VLESS landings, including VLESS Encryption
+- 时间校准：为依赖时间戳的 Shadowsocks 2022 链路提供进程内 NTP 校准
 
 ## Install
 
@@ -20,7 +21,7 @@ Node backend for [YZboard](https://github.com/P0me1oo/YZboard). Supports `sing-b
 ```bash
 docker run -d --restart=always --network=host \
   -e apiHost=https://panel.com -e apiKey=TOKEN -e nodeID=1 \
-  ghcr.io/p0me1oo/yzboard-node:v1.13-yz.13
+  ghcr.io/p0me1oo/yzboard-node:latest
 ```
 
 ### Installer（Linux systemd / OpenRC）
@@ -68,6 +69,7 @@ xbctl bind add-node --panel URL --token TOKEN --node-id 1
 xbctl bind add-machine --panel URL --token TOKEN --machine-id 1
 xbctl bind remove-node --panel URL --node-id 1
 xbctl service restart
+xbctl doctor time                  # 检查 NTP 来源与协议时间偏移
 ```
 
 `xbctl service status|start|stop|restart|enable|disable|logs` 会使用当前系统的服务管理器。

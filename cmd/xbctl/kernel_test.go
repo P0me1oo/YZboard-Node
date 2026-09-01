@@ -251,3 +251,45 @@ func TestConfigKernelTreatsEmptyTypeAsSingbox(t *testing.T) {
 		t.Fatalf("inst-a = %q, want xray", got)
 	}
 }
+
+func TestConfigKernelPreservesTimeSync(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yml")
+	content := `time_sync:
+  enabled: false
+  servers:
+    - ntp.example.com
+  interval: 120
+  timeout: 4
+  warn_offset: 6
+  error_offset: 16
+  critical_offset: 26
+instances:
+  - id: inst-a
+    panel:
+      url: https://panel.example.test
+      token_env: A_KEY
+      node_id: 7
+    kernel:
+      type: singbox
+      config_dir: /etc/xboard-node/inst-a
+    log:
+      level: info
+      output: stdout
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if err := runConfigKernel([]string{"xray", "--config", path}); err != nil {
+		t.Fatalf("switch kernel: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"time_sync:", "enabled: false", "ntp.example.com", "critical_offset: 26"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("rewritten config %q does not contain %q", string(data), want)
+		}
+	}
+}

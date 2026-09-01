@@ -646,3 +646,107 @@ func TestInheritFrom_RealityMinClientVer(t *testing.T) {
 		t.Errorf("explicit value overwritten: got %q", explicit.Kernel.RealityMinClientVer)
 	}
 }
+
+func TestLoad_TimeSyncDefaults(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://panel.example.com"
+  token: "secret-token"
+  node_id: 1
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.TimeSync.IsEnabled() {
+		t.Fatal("time_sync.enabled = false, want default true")
+	}
+	if cfg.TimeSync.Interval != DefaultTimeSyncInterval || cfg.TimeSync.Timeout != DefaultTimeSyncTimeout {
+		t.Fatalf("time_sync interval/timeout = %d/%d", cfg.TimeSync.Interval, cfg.TimeSync.Timeout)
+	}
+	if cfg.TimeSync.WarnOffset != DefaultTimeSyncWarnOffset ||
+		cfg.TimeSync.ErrorOffset != DefaultTimeSyncErrorOffset ||
+		cfg.TimeSync.CriticalOffset != DefaultTimeSyncCriticalOffset {
+		t.Fatalf("time_sync thresholds = %d/%d/%d",
+			cfg.TimeSync.WarnOffset,
+			cfg.TimeSync.ErrorOffset,
+			cfg.TimeSync.CriticalOffset,
+		)
+	}
+	if len(cfg.TimeSync.Servers) != len(DefaultTimeSyncServers) {
+		t.Fatalf("time_sync servers = %v", cfg.TimeSync.Servers)
+	}
+}
+
+func TestLoadRoot_TimeSyncInheritance(t *testing.T) {
+	path := writeTemp(t, `
+time_sync:
+  enabled: false
+  servers:
+    - ntp.example.com
+  interval: 120
+  timeout: 4
+  warn_offset: 6
+  error_offset: 16
+  critical_offset: 26
+instances:
+  - panel:
+      url: "https://panel.example.com"
+      token: "tok-a"
+      node_id: 1
+  - panel:
+      url: "https://panel.example.com"
+      token: "tok-b"
+      node_id: 2
+`)
+	root, err := LoadRoot(path)
+	if err != nil {
+		t.Fatalf("LoadRoot: %v", err)
+	}
+	for i, instance := range root.Instances {
+		if instance.TimeSync.IsEnabled() {
+			t.Fatalf("instances[%d] time sync should be disabled", i)
+		}
+		if instance.TimeSync.Interval != 120 || instance.TimeSync.Servers[0] != "ntp.example.com" {
+			t.Fatalf("instances[%d] time sync = %+v", i, instance.TimeSync)
+		}
+	}
+}
+
+func TestLoad_TimeSyncRejectsInvalidThresholdOrder(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://panel.example.com"
+  token: "secret-token"
+  node_id: 1
+time_sync:
+  warn_offset: 20
+  error_offset: 10
+  critical_offset: 25
+`)
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() error = nil, want invalid threshold order")
+	}
+}
+
+func TestValidateStartupLayoutRejectsDifferentTimeSync(t *testing.T) {
+	enabled := true
+	a := &Config{
+		InstanceID: "a",
+		TimeSync: TimeSyncConfig{
+			Enabled:        &enabled,
+			Servers:        []string{"time-a.example"},
+			Interval:       600,
+			Timeout:        3,
+			WarnOffset:     5,
+			ErrorOffset:    15,
+			CriticalOffset: 25,
+		},
+	}
+	b := *a
+	b.InstanceID = "b"
+	b.TimeSync.Servers = []string{"time-b.example"}
+	if err := ValidateStartupLayout([]*Config{a, &b}); err == nil {
+		t.Fatal("ValidateStartupLayout() error = nil, want time_sync conflict")
+	}
+}

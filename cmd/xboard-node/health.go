@@ -6,19 +6,24 @@ import (
 	"sync"
 
 	"github.com/cedar2025/xboard-node/internal/service"
+	"github.com/cedar2025/xboard-node/internal/timesync"
 )
 
 type healthTracker struct {
 	mu         sync.RWMutex
 	components map[string]service.RuntimeStatus
+	clock      *timesync.Manager
 }
 
 type healthSnapshot struct {
-	Status   string `json:"status"`
-	Total    int    `json:"total"`
-	Running  int    `json:"running"`
-	Starting int    `json:"starting"`
-	Failed   int    `json:"failed"`
+	Status   string            `json:"status"`
+	Total    int               `json:"total"`
+	Running  int               `json:"running"`
+	Starting int               `json:"starting"`
+	Failed   int               `json:"failed"`
+	Clock    timesync.Snapshot `json:"clock"`
+
+	componentsReady bool
 }
 
 func newHealthTracker() *healthTracker {
@@ -40,6 +45,12 @@ func (h *healthTracker) set(componentID string, status service.RuntimeStatus) {
 	h.mu.Unlock()
 }
 
+func (h *healthTracker) setClock(clock *timesync.Manager) {
+	h.mu.Lock()
+	h.clock = clock
+	h.mu.Unlock()
+}
+
 func (h *healthTracker) snapshot() healthSnapshot {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -55,10 +66,20 @@ func (h *healthTracker) snapshot() healthSnapshot {
 			snapshot.Starting++
 		}
 	}
+	if h.clock != nil {
+		snapshot.Clock = h.clock.Snapshot()
+	} else {
+		snapshot.Clock = timesync.Default().Snapshot()
+	}
+	snapshot.componentsReady = snapshot.Total > 0 && snapshot.Running == snapshot.Total
 	switch {
 	case snapshot.Failed > 0:
 		snapshot.Status = "degraded"
-	case snapshot.Total > 0 && snapshot.Running == snapshot.Total:
+	case !snapshot.componentsReady:
+		snapshot.Status = "starting"
+	case snapshot.Clock.Required && snapshot.Clock.Status != timesync.StatusNormal:
+		snapshot.Status = "degraded"
+	case snapshot.componentsReady:
 		snapshot.Status = "ok"
 	default:
 		snapshot.Status = "starting"
@@ -69,7 +90,7 @@ func (h *healthTracker) snapshot() healthSnapshot {
 func (h *healthTracker) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	snapshot := h.snapshot()
 	w.Header().Set("Content-Type", "application/json")
-	if snapshot.Status != "ok" {
+	if !snapshot.componentsReady || snapshot.Failed > 0 {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
 	_ = json.NewEncoder(w).Encode(snapshot)

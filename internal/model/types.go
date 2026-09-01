@@ -1,6 +1,8 @@
 package model
 
 import (
+	"strings"
+
 	"github.com/cedar2025/xboard-node/internal/config"
 	"github.com/cedar2025/xboard-node/internal/panel"
 )
@@ -115,6 +117,34 @@ func (n *NodeSpec) IsRelayEntry() bool {
 // Such a node has no panel users, so the kernel must stay up with an empty user set.
 func (n *NodeSpec) IsRelayLanding() bool {
 	return n != nil && n.Relay.IsLanding()
+}
+
+// UsesSS2022 判断当前节点的入站或受管中转出站是否依赖 SS2022 时间戳。
+func (n *NodeSpec) UsesSS2022() bool {
+	if n == nil {
+		return false
+	}
+	protocol := strings.ToLower(strings.TrimSpace(n.Protocol))
+	if (protocol == "shadowsocks" || protocol == "ss") && IsRelaySS2022Cipher(n.Cipher) {
+		return true
+	}
+	if n.Relay == nil {
+		return false
+	}
+	if n.Relay.IsLanding() {
+		return strings.EqualFold(strings.TrimSpace(n.Relay.Protocol), "shadowsocks") &&
+			IsRelaySS2022Cipher(n.Relay.Cipher)
+	}
+	if !n.Relay.IsEntry() {
+		return false
+	}
+	for _, child := range n.Relay.Children {
+		if strings.EqualFold(strings.TrimSpace(child.Protocol), "shadowsocks") &&
+			IsRelaySS2022Cipher(child.Cipher) {
+			return true
+		}
+	}
+	return false
 }
 
 // RelayOutboundTags returns the internal outbound tags in a stable order.

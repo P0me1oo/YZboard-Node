@@ -1,5 +1,13 @@
 # 变更记录
 
+## v1.13-yz.14 - 2026-09-02
+
+- 新增进程内 NTP 时间校准，默认并行查询多个时间源、校验响应并使用有效偏移中位数；只影响 Node 内嵌协议栈，不修改系统时间，也不管理 systemd-timesyncd、chrony 或同类服务。
+- Xray 与 sing-box 共享同一时间服务，覆盖普通 SS2022 入站、VLESS 前置中的 SS2022 中转出站和落地 SS2022 入站；传统 Shadowsocks、VLESS 中转和其他协议保持原行为。
+- 新增偏移分级、最近有效结果过期回退、仅在实际使用 SS2022 时触发的状态变化日志，以及 `/healthz` 的 `clock` 详情。时钟降级保持 HTTP 200，避免服务管理器反复重启。
+- 新增 `time_sync` 配置、跨实例一致性校验和 `xbctl doctor time` 主动诊断；诊断不依赖面板凭据，且不会修改系统时间。
+- 配套 YZ-Xray-core 源码目标版本升级为 `v26.7.11-yz.2`。正式发布前仍需先固定并推送核心提交，再用真实 pseudo-version 更新 Node 的 `go.mod` 和构建信息。
+
 ## v1.13-yz.13 - 2026-08-31
 
 - WebSocket 正常连接时保留至少每 5 分钟一次的 REST ETag 全量对账，修复 Redis Pub/Sub、Workerman 重启或短暂网络异常造成的配置和用户推送丢失。

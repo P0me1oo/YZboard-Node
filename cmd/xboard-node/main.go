@@ -19,6 +19,7 @@ import (
 	"github.com/cedar2025/xboard-node/internal/machine"
 	"github.com/cedar2025/xboard-node/internal/nlog"
 	"github.com/cedar2025/xboard-node/internal/service"
+	"github.com/cedar2025/xboard-node/internal/timesync"
 )
 
 var (
@@ -122,6 +123,10 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 			nlog.Core().Error("startup layout validation failed", "error", err)
 			os.Exit(1)
 		}
+		timeManager := timesync.New(instances[0].TimeSync)
+		timesync.SetDefault(timeManager)
+		health.setClock(timeManager)
+		timeManager.Start(ctx)
 
 		if instances[0].HealthPort != healthPort {
 			if healthSrv != nil {
@@ -205,12 +210,20 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 			if sig, shuttingDown := waitForReloadStop(doneCh, sigCh); shuttingDown {
 				nlog.Core().Info(fmt.Sprintf("received %v during reload, shutting down...", sig))
 				forceExitIfNeeded(waitForShutdown(doneCh, sigCh, 15*time.Second))
+				if watcher != nil {
+					watcher.Stop()
+				}
+				timeManager.Stop()
 				return
 			}
 		case sig := <-sigCh:
 			nlog.Core().Info(fmt.Sprintf("received %v, shutting down...", sig))
 			cancel()
 			forceExitIfNeeded(waitForShutdown(doneCh, sigCh, 15*time.Second))
+			if watcher != nil {
+				watcher.Stop()
+			}
+			timeManager.Stop()
 			return
 		case <-doneCh:
 		}
@@ -218,6 +231,7 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 		if watcher != nil {
 			watcher.Stop()
 		}
+		timeManager.Stop()
 
 		if newRoot == nil {
 			close(errCh)

@@ -19,14 +19,15 @@ import (
 )
 
 type Config struct {
-	InstanceID string `yaml:"-"`
-	Panel   PanelConfig   `yaml:"panel"`
-	Node    NodeConfig    `yaml:"node"`
-	Kernel  KernelConfig  `yaml:"kernel"`
-	Cert    CertConfig    `yaml:"cert"`
-	Log     LogConfig     `yaml:"log"`
-	Runtime RuntimeConfig `yaml:"runtime"`
-	WS      WSConfig      `yaml:"ws"`
+	InstanceID string         `yaml:"-"`
+	Panel      PanelConfig    `yaml:"panel"`
+	Node       NodeConfig     `yaml:"node"`
+	Kernel     KernelConfig   `yaml:"kernel"`
+	Cert       CertConfig     `yaml:"cert"`
+	Log        LogConfig      `yaml:"log"`
+	Runtime    RuntimeConfig  `yaml:"runtime"`
+	WS         WSConfig       `yaml:"ws"`
+	TimeSync   TimeSyncConfig `yaml:"time_sync"`
 	// Standalone enables a local-only node that never contacts the panel.
 	Standalone *StandaloneConfig `yaml:"standalone,omitempty"`
 	// HealthPort enables a lightweight HTTP health-check endpoint on the
@@ -90,6 +91,133 @@ type RuntimeConfig struct {
 	// Lower values (e.g. 50) trigger GC more often → lower memory, slightly higher CPU.
 	// 0 means "use the default (100)".
 	GoGCPercent int `yaml:"gogc"`
+}
+
+const (
+	DefaultTimeSyncInterval       = 600
+	DefaultTimeSyncTimeout        = 3
+	DefaultTimeSyncWarnOffset     = 5
+	DefaultTimeSyncErrorOffset    = 15
+	DefaultTimeSyncCriticalOffset = 25
+)
+
+var DefaultTimeSyncServers = []string{
+	"time.cloudflare.com",
+	"time.google.com",
+	"pool.ntp.org",
+}
+
+// TimeSyncConfig 控制进程内协议时钟校准，不修改服务器系统时间。
+type TimeSyncConfig struct {
+	Enabled        *bool    `yaml:"enabled,omitempty"`
+	Servers        []string `yaml:"servers,omitempty"`
+	Interval       int      `yaml:"interval,omitempty"`
+	Timeout        int      `yaml:"timeout,omitempty"`
+	WarnOffset     int      `yaml:"warn_offset,omitempty"`
+	ErrorOffset    int      `yaml:"error_offset,omitempty"`
+	CriticalOffset int      `yaml:"critical_offset,omitempty"`
+}
+
+func (c TimeSyncConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+func (c TimeSyncConfig) Equal(other TimeSyncConfig) bool {
+	if c.IsEnabled() != other.IsEnabled() ||
+		c.Interval != other.Interval ||
+		c.Timeout != other.Timeout ||
+		c.WarnOffset != other.WarnOffset ||
+		c.ErrorOffset != other.ErrorOffset ||
+		c.CriticalOffset != other.CriticalOffset ||
+		len(c.Servers) != len(other.Servers) {
+		return false
+	}
+	for i := range c.Servers {
+		if strings.TrimSpace(c.Servers[i]) != strings.TrimSpace(other.Servers[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *TimeSyncConfig) inheritFrom(parent TimeSyncConfig) {
+	if c.Enabled == nil && parent.Enabled != nil {
+		enabled := *parent.Enabled
+		c.Enabled = &enabled
+	}
+	if len(c.Servers) == 0 {
+		c.Servers = append([]string(nil), parent.Servers...)
+	}
+	if c.Interval == 0 {
+		c.Interval = parent.Interval
+	}
+	if c.Timeout == 0 {
+		c.Timeout = parent.Timeout
+	}
+	if c.WarnOffset == 0 {
+		c.WarnOffset = parent.WarnOffset
+	}
+	if c.ErrorOffset == 0 {
+		c.ErrorOffset = parent.ErrorOffset
+	}
+	if c.CriticalOffset == 0 {
+		c.CriticalOffset = parent.CriticalOffset
+	}
+}
+
+func (c *TimeSyncConfig) setDefaults() {
+	if c.Enabled == nil {
+		enabled := true
+		c.Enabled = &enabled
+	}
+	if len(c.Servers) == 0 {
+		c.Servers = append([]string(nil), DefaultTimeSyncServers...)
+	}
+	if c.Interval == 0 {
+		c.Interval = DefaultTimeSyncInterval
+	}
+	if c.Timeout == 0 {
+		c.Timeout = DefaultTimeSyncTimeout
+	}
+	if c.WarnOffset == 0 {
+		c.WarnOffset = DefaultTimeSyncWarnOffset
+	}
+	if c.ErrorOffset == 0 {
+		c.ErrorOffset = DefaultTimeSyncErrorOffset
+	}
+	if c.CriticalOffset == 0 {
+		c.CriticalOffset = DefaultTimeSyncCriticalOffset
+	}
+}
+
+// ResolveTimeSync 合并实例与顶层配置并补齐默认值，不依赖面板凭据校验。
+func ResolveTimeSync(instance, parent TimeSyncConfig) TimeSyncConfig {
+	instance.inheritFrom(parent)
+	instance.setDefaults()
+	return instance
+}
+
+func ValidateTimeSync(cfg TimeSyncConfig) error {
+	if len(cfg.Servers) == 0 {
+		return fmt.Errorf("time_sync.servers must not be empty")
+	}
+	for i, server := range cfg.Servers {
+		if strings.TrimSpace(server) == "" {
+			return fmt.Errorf("time_sync.servers[%d] must not be empty", i)
+		}
+	}
+	if cfg.Interval <= 0 {
+		return fmt.Errorf("time_sync.interval must be positive")
+	}
+	if cfg.Timeout <= 0 {
+		return fmt.Errorf("time_sync.timeout must be positive")
+	}
+	if cfg.WarnOffset <= 0 ||
+		cfg.ErrorOffset <= cfg.WarnOffset ||
+		cfg.CriticalOffset <= cfg.ErrorOffset {
+		return fmt.Errorf("time_sync offsets must satisfy 0 < warn_offset < error_offset < critical_offset")
+	}
+	return nil
 }
 
 type PanelConfig struct {
@@ -532,6 +660,9 @@ func (c *Config) inheritFrom(parent *Config) {
 	if c.Runtime.GoMemLimit == "" {
 		c.Runtime.GoMemLimit = parent.Runtime.GoMemLimit
 	}
+	// 时间校准由进程共享，但各实例仍先按顶层默认配置完成继承，
+	// 随后再由启动布局校验保证最终配置一致。
+	c.TimeSync.inheritFrom(parent.TimeSync)
 	// Kernel (NOT config_dir — each instance needs unique dir)
 	if c.Kernel.Type == "" {
 		c.Kernel.Type = parent.Kernel.Type
@@ -645,6 +776,7 @@ func (c *Config) setDefaultsFrom(baseDir string) {
 	if c.Node.DeviceReportInterval == 0 {
 		c.Node.DeviceReportInterval = 30
 	}
+	c.TimeSync.setDefaults()
 }
 
 func (c *Config) IsMachineMode() bool {
@@ -782,6 +914,9 @@ func (c *Config) validate() error {
 	if c.Node.PullInterval < 0 {
 		return fmt.Errorf("node.pull_interval must not be negative")
 	}
+	if err := ValidateTimeSync(c.TimeSync); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -911,11 +1046,20 @@ func ValidateStartupLayout(instances []*Config) error {
 	healthPorts := make(map[int]string)
 	configDirs := make(map[string]string)
 	nodeBindings := make(map[string]string)
+	var processTimeSync *TimeSyncConfig
+	var processTimeSyncOwner string
 	for _, instance := range instances {
 		if instance == nil {
 			continue
 		}
 		owner := instance.InstanceID
+		if processTimeSync == nil {
+			cfg := instance.TimeSync
+			processTimeSync = &cfg
+			processTimeSyncOwner = owner
+		} else if !instance.TimeSync.Equal(*processTimeSync) {
+			return fmt.Errorf("time_sync differs between %s and %s; all instances share one process clock", processTimeSyncOwner, owner)
+		}
 		if instance.HealthPort > 0 {
 			if other, ok := healthPorts[instance.HealthPort]; ok {
 				return fmt.Errorf("health_port %d is used by both %s and %s", instance.HealthPort, other, owner)

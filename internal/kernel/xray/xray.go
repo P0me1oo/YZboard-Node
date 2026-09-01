@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sagernet/sing/common/ntp"
+	singService "github.com/sagernet/sing/service"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/uuid"
 	xrayCore "github.com/xtls/xray-core/core"
@@ -35,6 +37,7 @@ import (
 	"github.com/cedar2025/xboard-node/internal/kernel/geodata"
 	"github.com/cedar2025/xboard-node/internal/model"
 	"github.com/cedar2025/xboard-node/internal/nlog"
+	"github.com/cedar2025/xboard-node/internal/timesync"
 )
 
 const (
@@ -132,8 +135,10 @@ func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ker
 	}
 
 	// ── Phase 2: Create instance (global lock for LD capture) ───────────
+	ctx := singService.ContextWithDefaultRegistry(context.Background())
+	singService.MustRegister[ntp.TimeService](ctx, timesync.Default())
 	xrayCreationMu.Lock()
-	inst, err := xrayCore.New(pbConfig)
+	inst, err := xrayCore.NewWithContext(ctx, pbConfig)
 	ld := globalLimitDispatcher.Load()
 	xrayCreationMu.Unlock()
 	if err != nil {

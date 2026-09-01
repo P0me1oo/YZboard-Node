@@ -12,10 +12,10 @@ func TestReleaseMetadataIsPinned(t *testing.T) {
 	if XrayUpstreamCommit != "50231eaff98ccc31b5cbd247a721c16e97fe5ec1" {
 		t.Fatalf("XrayUpstreamCommit = %q", XrayUpstreamCommit)
 	}
-	if XrayForkVersion != "v26.7.11-yz.1" {
+	if XrayForkVersion != "v26.7.11-yz.2" {
 		t.Fatalf("XrayForkVersion = %q", XrayForkVersion)
 	}
-	if XrayForkCommit != "620bee93867095f73880056cdfb08bc54a15f69e" {
+	if XrayForkCommit != "26b01717dd8d1fd604de5e23e2868fdef59eba2f" {
 		t.Fatalf("XrayForkCommit = %q", XrayForkCommit)
 	}
 	if SingBoxRequestedVersion != "v1.13.2" {
