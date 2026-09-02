@@ -6,17 +6,17 @@
 
 | 项目 | 标识 |
 | --- | --- |
-| Node 源码目标版本 | `v1.13-yz.15`（待发布） |
-| Node 发布版本 | `v1.13-yz.14` |
+| Node 源码目标版本 | `v1.13-yz.15` |
+| Node 发布版本 | `v1.13-yz.15` |
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.2` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | `911bf1be7b23b6b537e769c9c184069ad69bfbbb` |
+| Node Release Tag 对应 commit | `d821de890769aa20a001ca3f4ef43d24c001c48b` |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
-| Node Release 构建 | GitHub Actions [run 31741878287](https://github.com/P0me1oo/YZboard-Node/actions/runs/31741878287)，由固定 Tag `v1.13-yz.11` 构建 |
-| Node Docker 标签 | `ghcr.io/p0me1oo/yzboard-node:v1.13-yz.11`、`ghcr.io/p0me1oo/yzboard-node:911bf1be7b23b6b537e769c9c184069ad69bfbbb`、`ghcr.io/p0me1oo/yzboard-node:latest` |
-| Node Docker manifest | OCI index `sha256:8e28b01e9340b23fdd99454fa3a657b8cfa67af730c1f9a4c98d7eac1ad3e3e9`；包含 `linux/amd64` 与 `linux/arm64` |
-| Node Docker OCI 标识 | 两个架构均为 revision `911bf1be7b23b6b537e769c9c184069ad69bfbbb`、version `v1.13-yz.11` |
+| Node Release 构建 | GitHub Actions [run 33592394571](https://github.com/P0me1oo/YZboard-Node/actions/runs/33592394571)，由固定 Tag `v1.13-yz.15` 构建 |
+| Node Docker 标签 | `ghcr.io/p0me1oo/yzboard-node:v1.13-yz.15`、`ghcr.io/p0me1oo/yzboard-node:d821de890769aa20a001ca3f4ef43d24c001c48b`、`ghcr.io/p0me1oo/yzboard-node:latest` |
+| Node Docker manifest | OCI index `sha256:f3e0895ebc04ac603158a5b96413e7695e5c7a1abd596ee864d7d4852b0b4665`；包含 `linux/amd64` 与 `linux/arm64` |
+| Node Docker OCI 标识 | 两个架构均为 revision `d821de890769aa20a001ca3f4ef43d24c001c48b`、version `v1.13-yz.15` |
 | YZboard 兼容版本 | `1.8.0`（待发布；节点级内核选择需与 Node `v1.13-yz.15` 成套使用） |
 | 最近已发布 YZboard 兼容代码 | `cf698392cd0b0623876b5166ab31b10fea2cb889`（面板 `v1.4.0`） |
 | Xray 官方仓库 | `XTLS/Xray-core` |
@@ -84,6 +84,17 @@ VERSION=v1.13-yz.11 make build-linux
 - Node 自身版本、构建时间和提交短 SHA；
 - Xray 上游 Tag/commit、YZ fork 版本/commit，以及实际模块替换版本；
 - sing-box 请求版本和实际 replacement 版本。
+
+`v1.13-yz.15` Release 资产校验值：
+
+| 资产 | SHA-256 |
+| --- | --- |
+| `xboard-node-linux-amd64` | `9f10f11ed8d449b63893cdd7cdb150c7d3fa37239a12968b5e6f71c1c7d7e41d` |
+| `xboard-node-linux-arm64` | `f1719755cab857bbbb4961adb1c17e53e76bc6cd428b2e029898be8a209d273c` |
+| `xbctl-linux-amd64` | `e10813146d9a643928d039ce2bff222e521cb5b5b0d8205d1684584da2e9aae9` |
+| `xbctl-linux-arm64` | `df8b5b69bf58b05acb80a61df40f97f437eae48d25d21982e9bef90a2e4a0531` |
+| `install.sh` | `9b685f508ad44ca179914175595fd3bd1c32f1c40ba617177e7807e41317e7ba` |
+| `SHA256SUMS` | `838546fd99216921fdbdabdc8bbb1dfba96d5b603bd0c268eb04ba136b3cc61d` |
 
 `v1.13-yz.11` Release 资产校验值：
 
