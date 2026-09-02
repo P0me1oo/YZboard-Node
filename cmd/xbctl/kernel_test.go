@@ -220,8 +220,8 @@ func TestConfigKernelRejectsBadInput(t *testing.T) {
 	}
 }
 
-// sing-box remains the fallback when an instance has no explicit kernel type.
-func TestConfigKernelTreatsEmptyTypeAsSingbox(t *testing.T) {
+// Xray remains the fallback when an instance has no explicit kernel type.
+func TestConfigKernelTreatsEmptyTypeAsXray(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yml")
 	content := `instances:
@@ -240,15 +240,18 @@ func TestConfigKernelTreatsEmptyTypeAsSingbox(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	if err := runConfigKernel([]string{"singbox", "--config", path}); err != nil {
+	if err := runConfigKernel([]string{"xray", "--config", path}); err != nil {
 		t.Fatalf("switch: %v", err)
 	}
-	// Already effectively singbox, so the file keeps an empty type.
-	if err := runConfigKernel([]string{"xray", "--config", path}); err != nil {
-		t.Fatalf("switch to xray: %v", err)
+	// Already effectively Xray, so the file keeps an empty type.
+	if got := kernelTypes(t, path)["inst-a"]; got != "" {
+		t.Fatalf("inst-a = %q, want empty type", got)
 	}
-	if got := kernelTypes(t, path)["inst-a"]; got != "xray" {
-		t.Fatalf("inst-a = %q, want xray", got)
+	if err := runConfigKernel([]string{"singbox", "--config", path}); err != nil {
+		t.Fatalf("switch to singbox: %v", err)
+	}
+	if got := kernelTypes(t, path)["inst-a"]; got != "singbox" {
+		t.Fatalf("inst-a = %q, want singbox", got)
 	}
 }
 

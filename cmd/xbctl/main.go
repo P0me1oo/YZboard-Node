@@ -1512,7 +1512,7 @@ func runConfigKernel(args []string) error {
 
 		from := instances[i].Kernel.Type
 		if from == "" {
-			from = "singbox"
+			from = "xray"
 		}
 		if from == target {
 			fmt.Printf("%s: already %s\n", instances[i].InstanceID, target)

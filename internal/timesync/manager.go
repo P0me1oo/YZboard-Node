@@ -149,10 +149,16 @@ func (m *Manager) Start(parent context.Context) {
 	}
 	ctx, cancel := context.WithCancel(parent)
 	m.cancel = cancel
+	// 将首次检查也纳入等待组，避免 Stop 在首次检查结束前返回，或与
+	// 后台循环的启动形成 WaitGroup Add/Wait 竞态。
+	m.wg.Add(1)
 	m.runMu.Unlock()
 
 	_, _ = m.Check(ctx)
-	m.wg.Add(1)
+	if ctx.Err() != nil {
+		m.wg.Done()
+		return
+	}
 	go m.loop(ctx)
 }
 

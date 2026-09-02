@@ -12,6 +12,7 @@ Node backend for [YZboard](https://github.com/P0me1oo/YZboard). Supports `sing-b
 - Deploy modes: node mode, machine mode, standalone mode
 - Multi-instance: single process binding multiple panels / nodes
 - Relay: VLESS entry with Shadowsocks or VLESS landings, including VLESS Encryption
+- Machine mode: each panel node can select Xray or sing-box independently; Xray is the default
 - 时间校准：为依赖时间戳的 Shadowsocks 2022 链路提供进程内 NTP 校准
 
 ## Install

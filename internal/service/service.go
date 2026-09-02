@@ -183,8 +183,8 @@ func newService(cfg *config.Config, cp controlplane.ControlPlane) *Service {
 	case "xray":
 		k = xray.New(cfg.Kernel)
 	default:
-		nlog.Core().Warn("unsupported kernel type, defaulting to sing-box", "type", cfg.Kernel.Type)
-		k = singbox.New(cfg.Kernel)
+		nlog.Core().Warn("unsupported kernel type, defaulting to Xray", "type", cfg.Kernel.Type)
+		k = xray.New(cfg.Kernel)
 	}
 
 	l := limiter.New()

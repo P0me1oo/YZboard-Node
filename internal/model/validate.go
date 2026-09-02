@@ -82,6 +82,11 @@ func normalizeKernelType(value string) (string, error) {
 	}
 }
 
+// NormalizeKernelType exposes the canonical kernel names to orchestration code.
+func NormalizeKernelType(value string) (string, error) {
+	return normalizeKernelType(value)
+}
+
 func buildAvailableOutboundTags(structured []OutboundConfig, rawTags []string) map[string]struct{} {
 	available := map[string]struct{}{
 		"direct": {},

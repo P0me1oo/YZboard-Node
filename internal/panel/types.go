@@ -64,15 +64,16 @@ type Settings struct {
 
 // MachineNode is a single entry returned by GET /api/v2/server/machine/nodes.
 type MachineNode struct {
-	ID   int    `json:"id"`
-	Type string `json:"type"`
-	Name string `json:"name"`
+	ID         int    `json:"id"`
+	Type       string `json:"type"`
+	Name       string `json:"name"`
+	KernelType string `json:"kernel_type,omitempty"` // "xray" or "singbox"
 }
 
 // MachineNodesResponse is the response from GET /api/v2/server/machine/nodes.
 type MachineNodesResponse struct {
-	Nodes      []MachineNode      `json:"nodes"`
-	BaseConfig MachineBaseConfig  `json:"base_config"`
+	Nodes      []MachineNode     `json:"nodes"`
+	BaseConfig MachineBaseConfig `json:"base_config"`
 }
 
 // MachineBaseConfig holds polling intervals for machine mode.

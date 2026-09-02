@@ -119,6 +119,28 @@ func TestManagerUsageControlsRequiredState(t *testing.T) {
 	}
 }
 
+func TestManagerStartStopWaitsForInitialCheck(t *testing.T) {
+	manager := New(config.TimeSyncConfig{
+		Servers:  []string{"time.example"},
+		Interval: 3600,
+	})
+	manager.exchange = func(ctx context.Context, _ N.Dialer, _ M.Socksaddr) (*ntp.Response, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			return validResponse(0), nil
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	manager.Start(ctx)
+	cancel()
+	manager.Stop()
+	// Stop 应保持幂等；父上下文已取消时也应安全退出。
+	manager.Stop()
+}
+
 func TestManagerClassifyThresholds(t *testing.T) {
 	manager := New(config.TimeSyncConfig{})
 	tests := map[time.Duration]Status{

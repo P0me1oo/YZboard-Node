@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,9 +21,11 @@ import (
 
 // nodeHandle tracks a running node service.
 type nodeHandle struct {
-	cancel  context.CancelFunc
-	done    chan struct{}
-	mailbox *controlplane.NodeMailbox
+	cancel           context.CancelFunc
+	done             chan struct{}
+	mailbox          *controlplane.NodeMailbox
+	kernel           string // actual runtime kernel after transport compatibility resolution
+	configuredKernel string // panel-selected kernel used to detect selection changes
 }
 
 // Orchestrator manages all nodes bound to a panel machine. It:
@@ -185,16 +188,31 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 // ─── Node lifecycle ──────────────────────────────────────────────────────
 
 func (o *Orchestrator) startNode(ctx context.Context, mn panel.MachineNode) {
+	wantedKernel := o.machineNodeKernel(mn)
 	o.mu.Lock()
-	if _, exists := o.nodes[mn.ID]; exists {
+	if current, exists := o.nodes[mn.ID]; exists {
+		if current.configuredKernel == wantedKernel {
+			o.mu.Unlock()
+			return
+		}
 		o.mu.Unlock()
-		return
+		// Kernel changes cannot be hot-reloaded because the kernel backend is
+		// selected when the Service is constructed. Restart only this node.
+		o.stopNode(mn.ID)
+		o.mu.Lock()
+		if _, exists := o.nodes[mn.ID]; exists {
+			o.mu.Unlock()
+			return
+		}
 	}
 
 	nodeCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	mb := controlplane.NewNodeMailbox()
-	o.nodes[mn.ID] = &nodeHandle{cancel: cancel, done: done, mailbox: mb}
+	o.nodes[mn.ID] = &nodeHandle{
+		cancel: cancel, done: done, mailbox: mb,
+		kernel: wantedKernel, configuredKernel: wantedKernel,
+	}
 	o.mu.Unlock()
 
 	o.eventsMu.Lock()
@@ -203,6 +221,7 @@ func (o *Orchestrator) startNode(ctx context.Context, mn panel.MachineNode) {
 	o.setNodeStatus(mn.ID, service.RuntimeStarting)
 
 	nodeCfg := o.cfg.ExpandMachineNode(mn.ID, mn.Type)
+	nodeCfg.Kernel.Type = wantedKernel
 
 	perNodeClient := o.client.ForNode(mn.ID)
 
@@ -210,12 +229,22 @@ func (o *Orchestrator) startNode(ctx context.Context, mn panel.MachineNode) {
 	// If the transport (e.g. xhttp) is incompatible with the configured kernel
 	// (e.g. singbox), auto-switch to the required kernel for this node.
 	if cfgSnapshot, err := perNodeClient.GetConfig(); err == nil && cfgSnapshot != nil {
+		if snapshotKernel := strings.TrimSpace(cfgSnapshot.KernelType); snapshotKernel != "" {
+			if normalized, normalizeErr := model.NormalizeKernelType(snapshotKernel); normalizeErr == nil {
+				nodeCfg.Kernel.Type = normalized
+			}
+		}
 		if resolved := model.ResolveKernelForTransport(cfgSnapshot.Network, nodeCfg.Kernel.Type); resolved != nodeCfg.Kernel.Type {
 			nlog.Core().Info(fmt.Sprintf("machine: auto-switching kernel for node %d (%s→%s, transport=%s)",
 				mn.ID, nodeCfg.Kernel.Type, resolved, cfgSnapshot.Network))
 			nodeCfg.Kernel.Type = resolved
 		}
 	}
+	o.mu.Lock()
+	if handle, ok := o.nodes[mn.ID]; ok {
+		handle.kernel = nodeCfg.Kernel.Type
+	}
+	o.mu.Unlock()
 	// Reset cached ETag so the subsequent GetConfig in Initial() gets a full response.
 	perNodeClient.ResetConfigETag()
 
@@ -254,6 +283,16 @@ func (o *Orchestrator) startNode(ctx context.Context, mn panel.MachineNode) {
 		o.unregisterNode(mn.ID)
 		o.finishNode(mn.ID, done, err)
 	}()
+}
+
+func (o *Orchestrator) machineNodeKernel(mn panel.MachineNode) string {
+	if normalized, err := model.NormalizeKernelType(mn.KernelType); err == nil {
+		return normalized
+	}
+	if normalized, err := model.NormalizeKernelType(o.cfg.Kernel.Type); err == nil {
+		return normalized
+	}
+	return "xray"
 }
 
 func (o *Orchestrator) finishNode(nodeID int, done chan struct{}, runErr error) {
@@ -414,7 +453,18 @@ func (o *Orchestrator) onWSEvent(event panel.WSEvent) {
 		return
 	}
 
-	translated, err := controlplane.TranslateWSEvent(event, o.cfg.Kernel)
+	// Validate each event against the kernel selected for that node. A machine
+	// can run sing-box and Xray side by side, so the machine-level default is
+	// not sufficient here.
+	nodeKernel := o.cfg.Kernel.Type
+	o.mu.Lock()
+	if handle, ok := o.nodes[nodeID]; ok && handle.kernel != "" {
+		nodeKernel = handle.kernel
+	}
+	o.mu.Unlock()
+	nodeKcfg := o.cfg.Kernel
+	nodeKcfg.Type = nodeKernel
+	translated, err := controlplane.TranslateWSEvent(event, nodeKcfg)
 	if err != nil {
 		nlog.Core().Warn("machine ws event translation failed",
 			"type", event.Type, "node_id", nodeID, "error", err)

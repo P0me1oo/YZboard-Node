@@ -35,7 +35,8 @@ type Config struct {
 	HealthPort int `yaml:"health_port"`
 	// Nodes enables multi-node mode. When set, Panel.NodeID is ignored and
 	// one service instance is started per entry. All entries share the same
-	// panel URL/token, kernel type, log settings and runtime tuning.
+	// panel URL/token, log settings and runtime tuning; kernel type remains
+	// process configuration for static multi-node mode.
 	Nodes []NodeEntry `yaml:"nodes,omitempty"`
 
 	// Machine enables machine mode: a single process manages all nodes
@@ -46,7 +47,8 @@ type Config struct {
 }
 
 // MachineConfig identifies this process as a panel-managed machine that
-// dynamically discovers and runs all nodes bound to it.
+// dynamically discovers and runs all nodes bound to it. Each discovered node
+// may select its own kernel; Kernel.Type is only the fallback for old panels.
 type MachineConfig struct {
 	MachineID int    `yaml:"machine_id"`
 	Token     string `yaml:"token"`
@@ -727,7 +729,7 @@ func (c *Config) inheritFrom(parent *Config) {
 
 func (c *Config) setDefaultsFrom(baseDir string) {
 	if c.Kernel.Type == "" {
-		c.Kernel.Type = "singbox"
+		c.Kernel.Type = "xray"
 	}
 	if c.Kernel.ConfigDir == "" {
 		c.Kernel.ConfigDir = baseDir
