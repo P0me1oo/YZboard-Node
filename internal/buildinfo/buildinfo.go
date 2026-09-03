@@ -10,8 +10,8 @@ const (
 	// Xray 上游和 YZ fork 的发布标识必须指向固定引用，不能使用移动分支。
 	XrayUpstreamTag    = "v26.7.11"
 	XrayUpstreamCommit = "50231eaff98ccc31b5cbd247a721c16e97fe5ec1"
-	XrayForkVersion    = "v26.7.11-yz.2"
-	XrayForkCommit     = "26b01717dd8d1fd604de5e23e2868fdef59eba2f"
+	XrayForkVersion    = "v26.7.11-yz.3"
+	XrayForkCommit     = "601226e180d3684a5eabb8bc901c99f499398db1"
 
 	// sing-box 的 require 版本和 replace 后实际使用的版本需要同时记录。
 	SingBoxRequestedVersion = "v1.13.2"

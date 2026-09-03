@@ -61,18 +61,19 @@ type Xray struct {
 
 	// mu protects instance, limitDispatcher, users, protocol, inboundTag,
 	// lastKernelHash, and cumTraffic. Never held during slow I/O.
-	mu              sync.Mutex
-	instance        *xrayCore.Instance
-	limitDispatcher *LimitDispatcher
-	users           []model.UserSpec
-	nodeConfig      *model.NodeSpec
-	tls             kernel.TLSCert
-	protocol        string
-	inboundTag      string
-	lastKernelHash  string
-	cumTraffic      map[int][2]int64
-	cumRelayTraffic map[int][2]int64
-	speedLimitFunc  func(string) *rate.Limiter
+	mu                  sync.Mutex
+	instance            *xrayCore.Instance
+	limitDispatcher     *LimitDispatcher
+	users               []model.UserSpec
+	nodeConfig          *model.NodeSpec
+	tls                 kernel.TLSCert
+	protocol            string
+	inboundTag          string
+	lastKernelHash      string
+	cumTraffic          map[int][2]int64
+	cumRelayTraffic     map[int][2]int64
+	cumRelayUserTraffic map[int]map[int][2]int64
+	speedLimitFunc      func(string) *rate.Limiter
 
 	// running is set after a successful Start and cleared before shutdown.
 	// Atomic so IsRunning / GetConnections never block.
@@ -81,9 +82,10 @@ type Xray struct {
 
 func New(cfg config.KernelConfig) *Xray {
 	return &Xray{
-		cfg:             cfg,
-		cumTraffic:      make(map[int][2]int64),
-		cumRelayTraffic: make(map[int][2]int64),
+		cfg:                 cfg,
+		cumTraffic:          make(map[int][2]int64),
+		cumRelayTraffic:     make(map[int][2]int64),
+		cumRelayUserTraffic: make(map[int]map[int][2]int64),
 	}
 }
 
@@ -164,6 +166,7 @@ func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ker
 	x.inboundTag = nodeConfig.Protocol + "-in"
 	x.cumTraffic = make(map[int][2]int64)
 	x.cumRelayTraffic = make(map[int][2]int64)
+	x.cumRelayUserTraffic = make(map[int]map[int][2]int64)
 	x.lastKernelHash = kernel.ComputeHash(nodeConfig, users)
 	x.running.Store(true)
 	x.mu.Unlock()

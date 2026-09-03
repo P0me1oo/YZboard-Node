@@ -48,6 +48,11 @@ type Tracker struct {
 	lastSeenRelay map[int][2]int64
 	pendingRelay  map[int][2]int64
 
+	// Per-user relay bookkeeping is keyed by user ID and logical node ID.
+	// It remains separate from aggregate relay traffic for independent retries.
+	lastSeenRelayUser map[int]map[int][2]int64
+	pendingRelayUser  map[int]map[int][2]int64
+
 	// live holds the current snapshot, swapped atomically.
 	// Readers load this pointer without any lock.
 	live atomic.Pointer[snapshot]
@@ -55,10 +60,12 @@ type Tracker struct {
 
 func New() *Tracker {
 	t := &Tracker{
-		lastSeen:       make(map[int][2]int64),
-		pendingTraffic: make(map[int][2]int64),
-		lastSeenRelay:  make(map[int][2]int64),
-		pendingRelay:   make(map[int][2]int64),
+		lastSeen:          make(map[int][2]int64),
+		pendingTraffic:    make(map[int][2]int64),
+		lastSeenRelay:     make(map[int][2]int64),
+		pendingRelay:      make(map[int][2]int64),
+		lastSeenRelayUser: make(map[int]map[int][2]int64),
+		pendingRelayUser:  make(map[int]map[int][2]int64),
 	}
 	// Publish initial empty snapshot.
 	t.live.Store(&snapshot{

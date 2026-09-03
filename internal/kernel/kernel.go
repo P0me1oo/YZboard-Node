@@ -112,6 +112,11 @@ type RelayTrafficReader interface {
 	GetRelayTraffic(ctx context.Context) (map[int][2]int64, error)
 }
 
+// RelayUserTrafficReader 是中转入口内核可选的用户-逻辑节点累计流量能力。
+type RelayUserTrafficReader interface {
+	GetRelayUserTraffic(ctx context.Context) (map[int]map[int][2]int64, error)
+}
+
 // ComputeHash returns a hash of config + user identities that would
 // require a kernel restart/reconstruction if changed.
 func ComputeHash(nc *model.NodeSpec, users []model.UserSpec) string {

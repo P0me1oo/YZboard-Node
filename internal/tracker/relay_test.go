@@ -64,3 +64,40 @@ func TestProcessRelay_EmptyIsNoop(t *testing.T) {
 		t.Fatalf("flush = %v, want nil", got)
 	}
 }
+
+func TestProcessRelayUser_DeltasAndIsolation(t *testing.T) {
+	tr := New()
+	tr.ProcessRelayUser(map[int]map[int][2]int64{
+		12: {7: {100, 200}, 9: {30, 40}},
+	})
+	tr.ProcessRelayUser(map[int]map[int][2]int64{
+		12: {7: {150, 260}, 9: {30, 50}},
+		21: {7: {10, 20}},
+	})
+
+	got := tr.FlushRelayUserTraffic()
+	if got[12][7] != [2]int64{150, 260} || got[12][9] != [2]int64{30, 50} || got[21][7] != [2]int64{10, 20} {
+		t.Fatalf("relay user traffic = %v", got)
+	}
+	if tr.HasTraffic() {
+		t.Fatal("relay user traffic must not leak into user traffic")
+	}
+}
+
+func TestProcessRelayUser_CounterResetAndRestore(t *testing.T) {
+	tr := New()
+	tr.ProcessRelayUser(map[int]map[int][2]int64{12: {7: {500, 900}}})
+	tr.FlushRelayUserTraffic()
+	tr.ProcessRelayUser(map[int]map[int][2]int64{12: {7: {40, 70}}})
+	first := tr.FlushRelayUserTraffic()
+	if first[12][7] != [2]int64{40, 70} {
+		t.Fatalf("after reset = %v", first)
+	}
+
+	tr.RestoreRelayUserTraffic(first)
+	tr.RestoreRelayUserTraffic(map[int]map[int][2]int64{12: {7: {5, 5}}})
+	got := tr.FlushRelayUserTraffic()
+	if got[12][7] != [2]int64{45, 75} {
+		t.Fatalf("restored = %v", got)
+	}
+}

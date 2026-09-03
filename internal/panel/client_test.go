@@ -257,6 +257,7 @@ func TestReportIncludesBatchID(t *testing.T) {
 		"boot-1-1",
 		map[int][2]int64{1: {10, 20}},
 		map[int][2]int64{7: {30, 40}},
+		map[int]map[int][2]int64{1: {7: {5, 6}}},
 		map[int][]string{1: {"192.0.2.10"}},
 		map[int]int{1: 1},
 		1.5,
@@ -278,6 +279,17 @@ func TestReportIncludesBatchID(t *testing.T) {
 	if _, ok := relay["7"]; !ok {
 		t.Fatalf("relay_traffic missing node 7: %#v", relay)
 	}
+	relayUser, ok := received["relay_user_traffic"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("relay_user_traffic missing or wrong type: %#v", received["relay_user_traffic"])
+	}
+	user, ok := relayUser["1"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("relay_user_traffic missing user 1: %#v", relayUser)
+	}
+	if _, ok := user["7"]; !ok {
+		t.Fatalf("relay_user_traffic missing node 7: %#v", user)
+	}
 }
 
 func TestReportIncludesExplicitEmptySnapshots(t *testing.T) {
@@ -292,6 +304,7 @@ func TestReportIncludesExplicitEmptySnapshots(t *testing.T) {
 
 	if err := client.Report(
 		"boot-1-2",
+		nil,
 		nil,
 		nil,
 		map[int][]string{},
@@ -309,6 +322,9 @@ func TestReportIncludesExplicitEmptySnapshots(t *testing.T) {
 	}
 	if online, ok := received["online"].(map[string]interface{}); !ok || len(online) != 0 {
 		t.Fatalf("online = %#v, want explicit empty object", received["online"])
+	}
+	if _, ok := received["relay_user_traffic"]; ok {
+		t.Fatalf("relay_user_traffic should be omitted when empty")
 	}
 }
 

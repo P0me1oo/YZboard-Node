@@ -339,3 +339,78 @@ func (x *Xray) GetRelayTraffic(_ context.Context) (map[int][2]int64, error) {
 	}
 	return out, nil
 }
+
+// GetRelayUserTraffic 返回入口路由链路按用户和逻辑节点累计的流量。
+// Xray 计数器使用认证邮箱和 VLESS 路由编号，本方法依据当前中转配置映射回节点 ID。
+func (x *Xray) GetRelayUserTraffic(_ context.Context) (map[int]map[int][2]int64, error) {
+	if !x.running.Load() {
+		return nil, nil
+	}
+
+	x.mu.Lock()
+	defer x.mu.Unlock()
+
+	if x.instance == nil || x.nodeConfig == nil || !x.nodeConfig.IsRelayEntry() {
+		return nil, nil
+	}
+	routeToNode := make(map[int]int, len(x.nodeConfig.Relay.Children))
+	for _, child := range x.nodeConfig.Relay.Children {
+		if child.RouteID > 0 && child.NodeID > 0 {
+			routeToNode[child.RouteID] = child.NodeID
+		}
+	}
+	if len(routeToNode) == 0 || len(x.users) == 0 {
+		return nil, nil
+	}
+
+	sm := x.instance.GetFeature(stats.ManagerType())
+	if sm == nil {
+		return nil, nil
+	}
+	mgr, ok := sm.(stats.Manager)
+	if !ok {
+		return nil, nil
+	}
+
+	if x.cumRelayUserTraffic == nil {
+		x.cumRelayUserTraffic = make(map[int]map[int][2]int64, len(x.users))
+	}
+	out := make(map[int]map[int][2]int64)
+	for _, user := range x.users {
+		if user.ID <= 0 {
+			continue
+		}
+		email := userEmail(user.ID)
+		for routeID, nodeID := range routeToNode {
+			var deltaUp, deltaDown int64
+			if c := mgr.GetCounter(fmt.Sprintf("user>>>%s>>>relay>>>%d>>>traffic>>>uplink", email, routeID)); c != nil {
+				deltaUp = c.Set(0)
+			}
+			if c := mgr.GetCounter(fmt.Sprintf("user>>>%s>>>relay>>>%d>>>traffic>>>downlink", email, routeID)); c != nil {
+				deltaDown = c.Set(0)
+			}
+
+			if deltaUp > 0 || deltaDown > 0 {
+				cum := x.cumRelayUserTraffic[user.ID][nodeID]
+				cum[0] += deltaUp
+				cum[1] += deltaDown
+				if x.cumRelayUserTraffic[user.ID] == nil {
+					x.cumRelayUserTraffic[user.ID] = make(map[int][2]int64)
+				}
+				x.cumRelayUserTraffic[user.ID][nodeID] = cum
+			}
+
+			if cum := x.cumRelayUserTraffic[user.ID][nodeID]; cum[0] > 0 || cum[1] > 0 {
+				if out[user.ID] == nil {
+					out[user.ID] = make(map[int][2]int64)
+				}
+				out[user.ID][nodeID] = cum
+			}
+		}
+	}
+
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}

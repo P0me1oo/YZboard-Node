@@ -1174,6 +1174,7 @@ func (s *Service) takeReportBatch() *reportBatch {
 
 	traffic := cloneTraffic(s.tracker.FlushTraffic())
 	relayTraffic := cloneTraffic(s.tracker.FlushRelayTraffic())
+	relayUserTraffic := cloneRelayUserTraffic(s.tracker.FlushRelayUserTraffic())
 	aliveIPs := cloneAliveIPs(s.tracker.FlushAliveIPs())
 	status := monitor.Collect()
 	metrics := s.buildMetrics(status)
@@ -1183,22 +1184,22 @@ func (s *Service) takeReportBatch() *reportBatch {
 	return &reportBatch{
 		id: reportID,
 		payload: controlplane.ReportPayload{
-			ReportID:     reportID,
-			Traffic:      traffic,
-			RelayTraffic: relayTraffic,
-			Alive:        aliveIPs,
-			Online:       s.tracker.CurrentOnline(),
-			CPU:          status.CPU,
-			Mem:          [2]uint64{status.MemTotal, status.MemUsed},
-			Swap:         [2]uint64{status.SwapTotal, status.SwapUsed},
-			Disk:         [2]uint64{status.DiskTotal, status.DiskUsed},
-			Metrics:      metrics,
+			ReportID:         reportID,
+			Traffic:          traffic,
+			RelayTraffic:     relayTraffic,
+			RelayUserTraffic: relayUserTraffic,
+			Alive:            aliveIPs,
+			Online:           s.tracker.CurrentOnline(),
+			CPU:              status.CPU,
+			Mem:              [2]uint64{status.MemTotal, status.MemUsed},
+			Swap:             [2]uint64{status.SwapTotal, status.SwapUsed},
+			Disk:             [2]uint64{status.DiskTotal, status.DiskUsed},
+			Metrics:          metrics,
 		},
 	}
 }
 
-// trackRelayTraffic collects per-logical-node traffic from the entry's internal
-// outbounds. Kernels without the capability are silently skipped.
+// trackRelayTraffic 从入口内部出站采集按逻辑节点统计的中转流量；不支持该能力的内核跳过。
 func (s *Service) trackRelayTraffic(ctx context.Context) {
 	if s.lastConfig == nil || !s.lastConfig.IsRelayEntry() {
 		return
@@ -1213,6 +1214,17 @@ func (s *Service) trackRelayTraffic(ctx context.Context) {
 		return
 	}
 	s.tracker.ProcessRelay(relay)
+
+	userReader, ok := s.kernel.(kernel.RelayUserTrafficReader)
+	if !ok {
+		return
+	}
+	relayUser, err := userReader.GetRelayUserTraffic(ctx)
+	if err != nil {
+		nlog.Core().Debug("get per-user relay traffic failed", "error", err)
+		return
+	}
+	s.tracker.ProcessRelayUser(relayUser)
 }
 
 func (s *Service) nextReportID() string {
@@ -1248,6 +1260,27 @@ func cloneTraffic(src map[int][2]int64) map[int][2]int64 {
 		dst[uid] = value
 	}
 	return dst
+}
+
+func cloneRelayUserTraffic(src map[int]map[int][2]int64) map[int]map[int][2]int64 {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[int]map[int][2]int64, len(src))
+	for uid, nodes := range src {
+		if len(nodes) == 0 {
+			continue
+		}
+		copyNodes := make(map[int][2]int64, len(nodes))
+		for nodeID, value := range nodes {
+			copyNodes[nodeID] = value
+		}
+		out[uid] = copyNodes
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func cloneAliveIPs(src map[int][]string) map[int][]string {

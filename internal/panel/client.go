@@ -124,10 +124,11 @@ func (c *Client) Handshake() (*HandshakeResponse, error) {
 // The optional metrics map allows the node to submit richer telemetry
 // (active connections, per-core CPU, GC stats, limiter hits, etc.)
 // without changing the core schema of status.
-// relayTraffic carries per-logical-node transit traffic measured on a relay
-// entry's internal outbounds; the panel books it as landing-line operating data
-// only, never as user quota.
+// relayTraffic 是入口内部出站按逻辑节点统计的中转流量，只用于落地线路运营数据，
+// 不作为用户套餐流量。
+// relayUserTraffic 是同一组计数按用户和逻辑落地节点拆分的归属数据。
 func (c *Client) Report(reportID string, traffic map[int][2]int64, relayTraffic map[int][2]int64,
+	relayUserTraffic map[int]map[int][2]int64,
 	alive map[int][]string, online map[int]int,
 	cpu float64, mem, swap, disk [2]uint64,
 	metrics map[string]interface{},
@@ -143,6 +144,25 @@ func (c *Client) Report(reportID string, traffic map[int][2]int64, relayTraffic 
 			r[strconv.Itoa(nodeID)] = d
 		}
 		payload["relay_traffic"] = r
+	}
+
+	if len(relayUserTraffic) > 0 {
+		r := make(map[string]map[string][2]int64, len(relayUserTraffic))
+		for userID, nodes := range relayUserTraffic {
+			if len(nodes) == 0 {
+				continue
+			}
+			entry := make(map[string][2]int64, len(nodes))
+			for nodeID, d := range nodes {
+				entry[strconv.Itoa(nodeID)] = d
+			}
+			if len(entry) > 0 {
+				r[strconv.Itoa(userID)] = entry
+			}
+		}
+		if len(r) > 0 {
+			payload["relay_user_traffic"] = r
+		}
 	}
 
 	if len(traffic) > 0 {

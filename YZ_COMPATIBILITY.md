@@ -6,30 +6,30 @@
 
 | 项目 | 标识 |
 | --- | --- |
-| Node 源码目标版本 | `v1.13-yz.15` |
-| Node 发布版本 | `v1.13-yz.15` |
+| Node 源码目标版本 | `v1.13-yz.16` |
+| Node 发布版本 | `v1.13-yz.16` |
 | Node 适用分支 | `upgrade/xray-v26.7.11-yz.2` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | `d821de890769aa20a001ca3f4ef43d24c001c48b` |
+| Node Release Tag 对应 commit | 待发布（当前源码目标为 `v1.13-yz.16`） |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
-| Node Release 构建 | GitHub Actions [run 33592394571](https://github.com/P0me1oo/YZboard-Node/actions/runs/33592394571)，由固定 Tag `v1.13-yz.15` 构建 |
-| Node Docker 标签 | `ghcr.io/p0me1oo/yzboard-node:v1.13-yz.15`、`ghcr.io/p0me1oo/yzboard-node:d821de890769aa20a001ca3f4ef43d24c001c48b`、`ghcr.io/p0me1oo/yzboard-node:latest` |
+| Node Release 构建 | 待发布；源码目标版本为 `v1.13-yz.16` |
+| Node Docker 标签 | 待发布；正式标签使用 `v1.13-yz.16` |
 | Node Docker manifest | OCI index `sha256:f3e0895ebc04ac603158a5b96413e7695e5c7a1abd596ee864d7d4852b0b4665`；包含 `linux/amd64` 与 `linux/arm64` |
-| Node Docker OCI 标识 | 两个架构均为 revision `d821de890769aa20a001ca3f4ef43d24c001c48b`、version `v1.13-yz.15` |
-| YZboard 兼容版本 | `1.8.0`（待发布；节点级内核选择需与 Node `v1.13-yz.15` 成套使用） |
+| Node Docker OCI 标识 | 待发布 |
+| YZboard 兼容版本 | `1.9.0`（待发布；用户-落地流量归属需与 Node `v1.13-yz.16` 成套使用） |
 | 最近已发布 YZboard 兼容代码 | `cf698392cd0b0623876b5166ab31b10fea2cb889`（面板 `v1.4.0`） |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
 | Xray 上游 Tag commit | `50231eaff98ccc31b5cbd247a721c16e97fe5ec1` |
-| YZ-Xray-core 源码目标版本 | `v26.7.11-yz.2`（待发布） |
-| YZ-Xray-core 当前已固定版本 / commit | `v26.7.11-yz.2` / `26b01717dd8d1fd604de5e23e2868fdef59eba2f` |
-| Node 当前 Xray replace | `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260901175116-26b01717dd8d` |
-| YZboard 兼容标识 | `xray-v26.7.11-yz.2`（面板版本 `1.4.0`） |
+| YZ-Xray-core 源码目标版本 | `v26.7.11-yz.3`（待发布） |
+| YZ-Xray-core 当前已固定版本 / commit | `v26.7.11-yz.3` / `601226e180d3684a5eabb8bc901c99f499398db1` |
+| Node 当前 Xray replace | `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260903142229-601226e180d3` |
+| YZboard 兼容标识 | `xray-v26.7.11-yz.3`（面板版本 `1.9.0`） |
 | sing-box `require` 版本 | `v1.13.2` |
 | sing-box 实际 replacement | `github.com/cedar2025/sing-box v1.14.0-alpha.2.0.20260316103356-2e665cb7e295` |
 
-Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.5` 支持首版 Shadowsocks 中转，`yz.6` 至 `yz.9` 延续既有安装、出站和用户同步修订，`yz.10` 新增 VLESS 落地、VLESS Encryption 和当前 Xray 传输矩阵，`yz.11` 为安装器与 `xbctl` 增加 Alpine Linux/OpenRC 生命周期支持，`yz.12` 修复机器模式首个用户同步与失败回滚，`yz.13` 增加 REST/WS 双通道对账、ETag 事务回滚、配置应用重试和权威设备快照，`yz.14` 增加 SS2022 进程内时间校准、健康状态和主动诊断，`yz.15` 增加机器模式节点级内核选择并将代码层缺省统一为 Xray。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
+Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.5` 支持首版 Shadowsocks 中转，`yz.6` 至 `yz.9` 延续既有安装、出站和用户同步修订，`yz.10` 新增 VLESS 落地、VLESS Encryption 和当前 Xray 传输矩阵，`yz.11` 为安装器与 `xbctl` 增加 Alpine Linux/OpenRC 生命周期支持，`yz.12` 修复机器模式首个用户同步与失败回滚，`yz.13` 增加 REST/WS 双通道对账、ETag 事务回滚、配置应用重试和权威设备快照，`yz.14` 增加 SS2022 进程内时间校准、健康状态和主动诊断，`yz.15` 增加机器模式节点级内核选择并将代码层缺省统一为 Xray，`yz.16` 增加用户-落地节点流量归属上报。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
 
 先前的 `v0.1.0-yz.1` Tag 保留用于审计，但其版本低于上游 `v1.13`，不作为部署或升级目标，也不创建对应 Release。
 
@@ -38,6 +38,7 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 - Hysteria2 用户转换使用 Xray v26.7.11 的 `hysteria/account.MemoryAccount{Auth: ...}`，同时保留 `MemoryUser.Email` 的 `user@<id>` 映射。
 - Xray fork 提供的 Dispatcher、用户级限速、统计计数器和在线 IP/连接状态能力继续由 Node 使用。
 - Node 的流量方向保持 `[upload, download]`，由内核累计计数器交给 tracker 计算增量，再由面板客户端上报。
+- 中转入口的 `relay_user_traffic` 形状为 `user_id => logical_node_id => [upload, download]`，只用于用户-落地归属分析，不参与套餐扣除；`relay_traffic` 继续负责落地节点总量。
 - 每次刷出的报告批次带有进程启动标识和递增序号组成的 `report_id`；HTTP 失败时保留完整批次并复用 ID，避免面板重复累计。
 - Xray REALITY 入站的 `realitySettings.minClientVer` 由 Node 显式写入，默认 `0.0.0`，可通过 `kernel.reality_min_client_ver` 覆盖。缺省该字段时 v26.7.11 会使用内置下限 `26.3.27`，低于该版本的客户端握手会被拒绝。
 - v26.7.11 已移除未加密 Shadowsocks。历史配置中的 `none`/`plain` 会显式返回错误，不会静默转换成其他加密算法。
@@ -61,7 +62,7 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 - 普通 SS2022 入站、VLESS 前置中的 SS2022 出站和落地 SS2022 入站共享同一校准结果。VLESS 客户端入口本身不依赖该时间戳。
 - 校准器默认并行查询三个 NTP 源并使用有效偏移中位数；查询失败不会猜测时间，最近成功结果超过三个查询周期后回退系统时间。
 - `/healthz` 的时钟降级保持 HTTP 200；只有节点组件启动中或失败继续返回 HTTP 503。`xbctl doctor time` 的异常状态返回非零退出码。
-- 当前 `go.mod` 已固定 YZ-Xray-core `v0.0.0-20260901175116-26b01717dd8d`，对应 fork `v26.7.11-yz.2` 和 commit `26b01717dd8d1fd604de5e23e2868fdef59eba2f`。正式构建前仍需确认该核心提交可回滚，并不得改回本地路径 replace 或移动分支。
+- 当前 `go.mod` 已固定 YZ-Xray-core `v0.0.0-20260903142229-601226e180d3`，对应 fork `v26.7.11-yz.3` 和 commit `601226e180d3684a5eabb8bc901c99f499398db1`。正式构建前仍需确认该核心提交可回滚，并不得改回本地路径 replace 或移动分支。
 
 ## `yz.13` 同步兼容约束
 
