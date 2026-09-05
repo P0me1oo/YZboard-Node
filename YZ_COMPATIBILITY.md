@@ -11,9 +11,10 @@
 | Node 适用分支 | `upgrade/singbox-v1.14.0` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | `v1.13-yz.17` 尚未发布；升级前源码为 `7802e87136e62ebfc79048207b39323556c7cabc` |
+| Node Release Tag 对应 commit | `v1.13-yz.17` 尚未发布 |
+| Node `yz.17` 验证构建 commit | `ada7bb60b18bf14b80e171030b82bc0f3412beb6` |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
-| Node Release 构建 | 最近已发布 `v1.13-yz.16`；`v1.13-yz.17-test` 仅用于本次隔离验收 |
+| Node Release 构建 | 最近已发布 `v1.13-yz.16`；`v1.13-yz.17` 双架构验证构建已完成，尚未发布 |
 | Node Docker 标签 | 本次尚未发布 `v1.13-yz.17` 镜像 |
 | Node Docker manifest | OCI index `sha256:f3e0895ebc04ac603158a5b96413e7695e5c7a1abd596ee864d7d4852b0b4665`；包含 `linux/amd64` 与 `linux/arm64` |
 | Node Docker OCI 标识 | 待发布 |
@@ -47,6 +48,16 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 远程 Tag 指向上表中的完整兼容提交。下载的 Go 模块中，1187 份源码、模块文件及第三方来源文件与该提交的原始 Git 内容逐字节一致；657 项模块版本与隔离实测使用的依赖列表一致。`go mod verify` 通过，Xray replacement 保持原有固定提交。
 
 使用正式 `go.mod` 在 Windows amd64 执行 `go test -mod=readonly -count=1 -tags 'with_quic with_utls with_wireguard with_acme with_clash_api' ./...`，全部 17 个测试包通过，共 522 项测试及子测试，没有失败或跳过。本轮为普通测试；相同源码和依赖版本的 Linux race 结果见下文。
+
+以下产物从 `ada7bb60b18bf14b80e171030b82bc0f3412beb6` 的干净源码构建，版本为 `v1.13-yz.17`，构建时间为 `2026-09-05T14:14:13Z`，工具链为 `Go 1.26.4`，`CGO_ENABLED=0`。`go version -m` 已确认两个 Linux 目标架构、远程固定的 sing-box 与 Xray 模块，以及一致的源码提交和 `vcs.modified=false`。完整构建参数和校验值由产物附带的 `build-metadata.json` 与 `SHA256SUMS` 保存。
+
+| 固定依赖构建产物 | SHA-256 |
+| --- | --- |
+| `xboard-node-linux-amd64` | `9e71a840ab5716eb005c7ad4d8ff7fbb8f5c42a335dd709cb32e6f618d656ddf` |
+| `xboard-node-linux-arm64` | `0f7884d02c2902a7df1198da3ffc8882af444b62e212f83a41ac5fe985a011dc` |
+| `xbctl-linux-amd64` | `c7ba1724e0852168bb0795d09fe7944d6bc6c9daa4b349dddaba589040d961cb` |
+| `xbctl-linux-arm64` | `5b0086dde3af4a69f960e77962d1af7a8f40040921e9177be4888b573fb13bba` |
+| `install.sh` | `8e7c5c21210020f283ebc793e7c6deb8b389648060dc689b88653293c6c6d8dc` |
 
 ## `yz.17` 开发验证（2026-09-05）
 
