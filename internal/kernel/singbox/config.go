@@ -439,9 +439,13 @@ func mergeCustomSingboxRoute(cfg M, customRoute map[string]any) {
 }
 
 func buildInbound(nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+	listenIP := nc.ListenIP
+	if listenIP == "" {
+		listenIP = "::"
+	}
 	base := M{
 		"tag":         nc.Protocol + "-in",
-		"listen":      "::",
+		"listen":      listenIP,
 		"listen_port": nc.ServerPort,
 	}
 
@@ -507,6 +511,8 @@ var ss2022Methods = map[string]ss2022Config{
 func buildShadowsocks(base M, nc *model.NodeSpec, users []model.UserSpec) M {
 	base["type"] = "shadowsocks"
 	base["method"] = nc.Cipher
+	// 空用户表重启后仍使用多用户认证，不能退回仅校验服务器密钥。
+	base["multi_user"] = true
 
 	ss2022, isSS2022 := ss2022Methods[nc.Cipher]
 	if isSS2022 {
@@ -772,6 +778,7 @@ func buildNaive(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TL
 
 func buildSocks(base M, users []model.UserSpec) M {
 	base["type"] = "socks"
+	base["require_auth"] = true
 
 	userList := make([]M, 0, len(users))
 	for _, u := range users {
@@ -786,6 +793,7 @@ func buildSocks(base M, users []model.UserSpec) M {
 
 func buildHTTP(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	base["type"] = "http"
+	base["require_auth"] = true
 
 	userList := make([]M, 0, len(users))
 	for _, u := range users {

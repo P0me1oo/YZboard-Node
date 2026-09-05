@@ -23,6 +23,7 @@ OPENRC_LOG_PATH="/var/log/${SERVICE_NAME}.log"
 SERVICE_MANAGER=""
 SERVICE_PATH=""
 CLI_PATH="/usr/local/bin/xbctl"
+CLI_SYMLINK_PATH="/usr/bin/xbctl"
 INSTALLER_COPY_PATH="${INSTALL_ROOT}/install.sh"
 CLI_BINARY_SOURCE=""
 DEFAULT_HEALTH_PORT=65530
@@ -837,7 +838,7 @@ install_staged_files() {
         install -m 755 "$0" "$INSTALLER_COPY_PATH"
     fi
     install -m 755 "$TMP_DIR/xbctl" "$CLI_PATH"
-    ln -sf "$CLI_PATH" /usr/bin/xbctl 2>/dev/null || true
+    ln -sf "$CLI_PATH" "$CLI_SYMLINK_PATH" 2>/dev/null || true
     install -m "$(service_file_mode)" "$TMP_DIR/service" "$SERVICE_PATH"
     service_reload
     service_enable > /dev/null 2>&1
@@ -926,7 +927,7 @@ perform_upgrade() {
     backup_existing_state
     install -m 755 "$TMP_DIR/xboard-node" "$BINARY_PATH"
     install -m 755 "$TMP_DIR/xbctl" "$CLI_PATH"
-    ln -sf "$CLI_PATH" /usr/bin/xbctl 2>/dev/null || true
+    ln -sf "$CLI_PATH" "$CLI_SYMLINK_PATH" 2>/dev/null || true
     install -m "$(service_file_mode)" "$TMP_DIR/service" "$SERVICE_PATH"
     service_reload
     service_restart
@@ -964,7 +965,7 @@ perform_uninstall() {
     fi
     rm -f "$BINARY_PATH"
     rm -f "$CLI_PATH"
-    rm -f /usr/bin/xbctl 2>/dev/null || true
+    rm -f "$CLI_SYMLINK_PATH" 2>/dev/null || true
     if [ "$PURGE" -eq 1 ]; then
         rm -rf "$INSTALL_ROOT"
         log_info "Removed ${INSTALL_ROOT}"

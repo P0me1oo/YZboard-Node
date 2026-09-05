@@ -59,7 +59,9 @@ jobs:
         run: make test
 
       - name: Validate installer syntax
-        run: bash -n install.sh tests/install_service_manager_test.sh
+        run: |
+          bash -n install.sh tests/install_service_manager_test.sh tests/singbox_isolated_install.sh
+          python3 -c 'import ast, pathlib; ast.parse(pathlib.Path("tests/singbox_install_probe.py").read_text(encoding="utf-8"))'
 
   build:
     name: Build

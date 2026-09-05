@@ -59,10 +59,6 @@ type SingBox struct {
 	// deviceLimitFunc resolves a user UUID to (limit, hasLimit) for gate-keeping.
 	// Set once by SetDeviceLimitFunc and forwarded to every new ConnTracker.
 	deviceLimitFunc func(string) (int, bool)
-
-	// trackerRegistered prevents duplicate AppendTracker calls on the same
-	// Router instance during Reload. Reset to false on full restart.
-	trackerRegistered bool
 }
 
 func New(cfg config.KernelConfig) *SingBox {
@@ -128,6 +124,16 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 		return fmt.Errorf("create sing-box instance: %w", err)
 	}
 
+	// 在开放监听前注册统计器，首个连接也必须纳入同一份用户统计。
+	tracker := NewConnTracker(0)
+	tracker.SetUserMap(buildUserMap(users))
+	if s.speedLimitFunc != nil {
+		tracker.SetSpeedLimitFunc(s.speedLimitFunc)
+	}
+	if s.deviceLimitFunc != nil {
+		tracker.SetDeviceLimitFunc(s.deviceLimitFunc)
+	}
+	instance.Router().AppendTracker(tracker)
 	if err := instance.Start(); err != nil {
 		instance.Close()
 		cancel()
@@ -142,18 +148,7 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 	s.nodeConfig = nodeConfig
 	s.tls = tls
 
-	// Fresh tracker on full restart.
-	s.connTracker = NewConnTracker(0)
-	s.connTracker.SetUserMap(buildUserMap(users))
-	if s.speedLimitFunc != nil {
-		s.connTracker.SetSpeedLimitFunc(s.speedLimitFunc)
-	}
-	if s.deviceLimitFunc != nil {
-		s.connTracker.SetDeviceLimitFunc(s.deviceLimitFunc)
-	}
-
-	s.trackerRegistered = false
-	s.registerTracker(ctx)
+	s.connTracker = tracker
 
 	// Recycle old instance in background — drain then close.
 	if oldBox != nil {
@@ -224,12 +219,17 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 		return fmt.Errorf("router not available")
 	}
 
-	// Update routing rules
-	if err := router.UpdateRules(opts.Route.Rules, opts.Route.RuleSet); err != nil {
-		nlog.Core().Debug("routing reload failed", "error", err)
-	} else {
-		nlog.Core().Debug("sing-box routing reloaded")
+	// 路由应用失败时保留旧配置状态，让上层能够重试同一配置。
+	updater, ok := router.(interface {
+		UpdateRules([]option.Rule, []option.RuleSet) error
+	})
+	if !ok {
+		return fmt.Errorf("sing-box router does not support rule updates")
 	}
+	if err := updater.UpdateRules(opts.Route.Rules, opts.Route.RuleSet); err != nil {
+		return fmt.Errorf("reload sing-box routes: %w", err)
+	}
+	nlog.Core().Debug("sing-box routing reloaded")
 
 	nopFactory := singLog.NewNOPFactory()
 
@@ -315,23 +315,6 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 	s.nodeConfig = nodeConfig
 	s.tls = tls
 	return nil
-}
-
-// registerTracker wires the ConnTracker to the current Router exactly once.
-// The ConnTracker handles both byte counting and optional rate limiting
-// in a single wrapper, so no additional trackers are needed.
-func (s *SingBox) registerTracker(ctx context.Context) {
-	if s.trackerRegistered {
-		return
-	}
-	router := service.FromContext[adapter.Router](ctx)
-	if router == nil {
-		return
-	}
-	if s.connTracker != nil {
-		router.AppendTracker(s.connTracker)
-	}
-	s.trackerRegistered = true
 }
 
 func (s *SingBox) Stop() {

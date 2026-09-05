@@ -14,6 +14,7 @@ Node backend for [YZboard](https://github.com/P0me1oo/YZboard). Supports `sing-b
 - Relay: VLESS entry with Shadowsocks or VLESS landings, including VLESS Encryption
 - Machine mode: each panel node can select Xray or sing-box independently; Xray is the default
 - 时间校准：为依赖时间戳的 Shadowsocks 2022 链路提供进程内 NTP 校准
+- sing-box：`yz.17` 以官方 `v1.14.0` 为基线，固定使用 `P0me1oo/YZ-sing-box v1.14.0-yz.1`，保留用户和路由热更新、Mieru；发布状态见 [兼容矩阵](YZ_COMPATIBILITY.md)，运行和安装验收方法见 [升级验证](docs/singbox-v1.14-validation.md)
 
 ## Install
 

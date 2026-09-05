@@ -18,10 +18,10 @@ func TestReleaseMetadataIsPinned(t *testing.T) {
 	if XrayForkCommit != "601226e180d3684a5eabb8bc901c99f499398db1" {
 		t.Fatalf("XrayForkCommit = %q", XrayForkCommit)
 	}
-	if SingBoxRequestedVersion != "v1.13.2" {
+	if SingBoxRequestedVersion != "v1.14.0" {
 		t.Fatalf("SingBoxRequestedVersion = %q", SingBoxRequestedVersion)
 	}
-	if SingBoxResolvedVersion != "v1.14.0-alpha.2.0.20260316103356-2e665cb7e295" {
+	if SingBoxResolvedVersion != "v1.14.0-yz.1" {
 		t.Fatalf("SingBoxResolvedVersion = %q", SingBoxResolvedVersion)
 	}
 }
@@ -35,6 +35,7 @@ func TestReportContainsForkAndDependencyIdentity(t *testing.T) {
 		XrayForkCommit,
 		SingBoxRequestedVersion,
 		SingBoxResolvedVersion,
+		SingBoxUpstreamCommit,
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report %q does not contain %q", report, want)

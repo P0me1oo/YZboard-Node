@@ -14,8 +14,9 @@ const (
 	XrayForkCommit     = "601226e180d3684a5eabb8bc901c99f499398db1"
 
 	// sing-box 的 require 版本和 replace 后实际使用的版本需要同时记录。
-	SingBoxRequestedVersion = "v1.13.2"
-	SingBoxResolvedVersion  = "v1.14.0-alpha.2.0.20260316103356-2e665cb7e295"
+	SingBoxRequestedVersion = "v1.14.0"
+	SingBoxResolvedVersion  = "v1.14.0-yz.1"
+	SingBoxUpstreamCommit   = "0b8995879f29a9b98ee027bc17b75e101445b238"
 )
 
 // ModuleVersion 返回构建产物中嵌入的模块版本。
@@ -45,7 +46,7 @@ func Report(binary, version, buildTime, commit string) string {
 	return fmt.Sprintf(
 		"%s %s (built %s, commit %s)\n"+
 			"xray-core: fork %s (upstream %s @ %s; fork commit %s; module %s)\n"+
-			"sing-box: requested %s, resolved %s (module %s)",
+			"sing-box: requested %s, resolved %s (upstream commit %s; module %s)",
 		binary,
 		version,
 		buildTime,
@@ -57,6 +58,7 @@ func Report(binary, version, buildTime, commit string) string {
 		ModuleVersion("github.com/xtls/xray-core"),
 		SingBoxRequestedVersion,
 		SingBoxResolvedVersion,
+		SingBoxUpstreamCommit,
 		ModuleVersion("github.com/sagernet/sing-box"),
 	)
 }

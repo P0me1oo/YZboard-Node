@@ -25,7 +25,7 @@ build-all: build-linux build-linux-arm64
 # Run tests
 test:
 	bash tests/install_service_manager_test.sh
-	go test -v -race -count=1 ./...
+	go test -v -race -count=1 -tags "with_quic with_utls with_wireguard with_acme with_clash_api" ./...
 
 # Clean build artifacts
 clean:

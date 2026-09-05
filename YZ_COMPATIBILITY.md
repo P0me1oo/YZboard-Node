@@ -6,15 +6,15 @@
 
 | 项目 | 标识 |
 | --- | --- |
-| Node 源码目标版本 | `v1.13-yz.16` |
+| Node 源码目标版本 | `v1.13-yz.17`（尚未发布） |
 | Node 发布版本 | `v1.13-yz.16` |
-| Node 适用分支 | `upgrade/xray-v26.7.11-yz.2` |
+| Node 适用分支 | `upgrade/singbox-v1.14.0` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | 待发布（当前源码目标为 `v1.13-yz.16`） |
+| Node Release Tag 对应 commit | `v1.13-yz.17` 尚未发布；升级前源码为 `7802e87136e62ebfc79048207b39323556c7cabc` |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
-| Node Release 构建 | 待发布；源码目标版本为 `v1.13-yz.16` |
-| Node Docker 标签 | 待发布；正式标签使用 `v1.13-yz.16` |
+| Node Release 构建 | 最近已发布 `v1.13-yz.16`；`v1.13-yz.17-test` 仅用于本次隔离验收 |
+| Node Docker 标签 | 本次尚未发布 `v1.13-yz.17` 镜像 |
 | Node Docker manifest | OCI index `sha256:f3e0895ebc04ac603158a5b96413e7695e5c7a1abd596ee864d7d4852b0b4665`；包含 `linux/amd64` 与 `linux/arm64` |
 | Node Docker OCI 标识 | 待发布 |
 | YZboard 兼容版本 | `1.9.0`（待发布；用户-落地流量归属需与 Node `v1.13-yz.16` 成套使用） |
@@ -26,12 +26,56 @@
 | YZ-Xray-core 当前已固定版本 / commit | `v26.7.11-yz.3` / `601226e180d3684a5eabb8bc901c99f499398db1` |
 | Node 当前 Xray replace | `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260903142229-601226e180d3` |
 | YZboard 兼容标识 | `xray-v26.7.11-yz.3`（面板版本 `1.9.0`） |
-| sing-box `require` 版本 | `v1.13.2` |
-| sing-box 实际 replacement | `github.com/cedar2025/sing-box v1.14.0-alpha.2.0.20260316103356-2e665cb7e295` |
+| sing-box `require` 版本 | `v1.14.0` |
+| sing-box 实际 replacement | `github.com/P0me1oo/YZ-sing-box v1.14.0-yz.1` |
+| sing-box 官方基线 | `v1.14.0` / `0b8995879f29a9b98ee027bc17b75e101445b238` |
+| sing-box 兼容仓库 | [P0me1oo/YZ-sing-box](https://github.com/P0me1oo/YZ-sing-box)；保留用户、路由热更新和 Mieru |
+| sing-box 兼容 Tag / commit | `v1.14.0-yz.1` / `f47d4d565a4371cf46b6c462612fc085f634a6af` |
+| sing-box 模块校验值 | `h1:oyWPL6yHrnYmtLhvM54ygF0fuRbIxIKf5K42rPafUeU=` |
+| sing-box 验证依赖 | 正式 `go.mod` 使用远程固定 Tag；前期隔离实测使用同一兼容源码的本地 replacement |
 
 Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.5` 支持首版 Shadowsocks 中转，`yz.6` 至 `yz.9` 延续既有安装、出站和用户同步修订，`yz.10` 新增 VLESS 落地、VLESS Encryption 和当前 Xray 传输矩阵，`yz.11` 为安装器与 `xbctl` 增加 Alpine Linux/OpenRC 生命周期支持，`yz.12` 修复机器模式首个用户同步与失败回滚，`yz.13` 增加 REST/WS 双通道对账、ETag 事务回滚、配置应用重试和权威设备快照，`yz.14` 增加 SS2022 进程内时间校准、健康状态和主动诊断，`yz.15` 增加机器模式节点级内核选择并将代码层缺省统一为 Xray，`yz.16` 增加用户-落地节点流量归属上报。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
 
 先前的 `v0.1.0-yz.1` Tag 保留用于审计，但其版本低于上游 `v1.13`，不作为部署或升级目标，也不创建对应 Release。
+
+`yz.17` 将 sing-box 官方基线更新为 `v1.14.0`，修复 UDP 统计、用户更新并发、稳定认证身份、路由更新回滚和 Mieru 监听生命周期。兼容源码与 Node 的 Xray 依赖独立；本次没有修改 YZboard 或 YZ-Xray-core。
+
+正式 `go.mod` 与 `go.sum` 已固定兼容核心的远程 Tag 和校验值。Node `v1.13-yz.17` 尚未发布，已完成的源码升级和构建验证不改变已发布版本或服务器安装版本。
+
+## `yz.17` 固定依赖验证（2026-09-05）
+
+远程 Tag 指向上表中的完整兼容提交。下载的 Go 模块中，1187 份源码、模块文件及第三方来源文件与该提交的原始 Git 内容逐字节一致；657 项模块版本与隔离实测使用的依赖列表一致。`go mod verify` 通过，Xray replacement 保持原有固定提交。
+
+使用正式 `go.mod` 在 Windows amd64 执行 `go test -mod=readonly -count=1 -tags 'with_quic with_utls with_wireguard with_acme with_clash_api' ./...`，全部 17 个测试包通过，共 522 项测试及子测试，没有失败或跳过。本轮为普通测试；相同源码和依赖版本的 Linux race 结果见下文。
+
+## `yz.17` 开发验证（2026-09-05）
+
+本次结果对应 `v1.13-yz.17-test`。Node 使用升级分支的未提交改动及上表中的本地兼容核心；不代表 `v1.13-yz.17` 已发布。测试方法和未覆盖的场景见 [sing-box 升级验证](docs/singbox-v1.14-validation.md)。
+
+| 检查 | 结果 |
+| --- | --- |
+| 核心普通测试 | `./route ./route/rule` 通过；包含规则集事务、并发匹配、初始网络通知和连接转交 |
+| Linux amd64 race | Node 全部 17 个测试包及核心 `route` 包通过；未跳过测试，数据竞争报告为 0 |
+| 协议与用户生命周期 | 13 个 TCP 场景、10 个 UDP 场景通过；覆盖重复增删、已有连接、新流、重载及恢复 |
+| 空用户重启 | SOCKS、HTTP、普通 Shadowsocks、SS2022 AES-128 均拒绝未授权连接，重新添加用户后恢复 |
+| Mieru 监听生命周期 | TCP/UDP 停止后重启通过，端口被占用时明确返回启动错误 |
+| 安装器检查 | 服务管理器测试、Bash 语法和 Python 语法检查通过 |
+| YT-HK 隔离安装 | 使用最终 amd64 产物完成安装、重复安装、模拟面板用户同步、路由回滚及恢复、流量与状态上报、systemd 重启 |
+| 原服务与清理 | 原服务 PID 和程序校验值未变化；一次性实例、凭据、上传程序和测试日志均已清理，测试 SSH 会话已关闭 |
+| 目标架构 | `linux/amd64`、`linux/arm64` 的 Node 和 xbctl 构建通过；arm64 仅完成构建与元数据检查 |
+
+构建时间为 `2026-09-05T13:13:22Z`，工具链为 `Go 1.26.4`，可安装产物使用 `CGO_ENABLED=0`。`go version -m` 已确认两个目标架构、sing-box `v1.14.0` 的本地 replacement、固定的 YZ-Xray-core replacement，以及 Node 的 `vcs.revision=7802e87136e62ebfc79048207b39323556c7cabc`、`vcs.modified=true`。这些是开发构建的实际标识；正式依赖固定后必须重新提交并构建发布产物。
+
+| 开发产物 | SHA-256 |
+| --- | --- |
+| `xboard-node-linux-amd64` | `8734c3e69d773ad8167545a5566d1eb9126fe7bb93b0a3cf142c17f1a44e9ae6` |
+| `xboard-node-linux-arm64` | `191840244cbb1d4509e9ae5e12642349e029e3f7957f45716fa8974fb3424242` |
+| `xbctl-linux-amd64` | `a46b5e529b319be5b85a92c78b77a8bb078dadb57574d0799b48b78a1e183272` |
+| `xbctl-linux-arm64` | `b8442e4a1d267c381353718e3049a761289cadd1300a94e6b10b74b8cf9bba3f` |
+
+真实安装使用的开发包 SHA-256 为 `369862973dcc38a9551fc8d04f161bc4084a93ea0da76d2171f94d6df0fbf245`；包含全部 18 个测试二进制的 race 包 SHA-256 为 `eedf0cda1bf48f5b8b2c91985f0482c1f06322e79ab5875e024465bea4fd3ca0`。上传后已在服务器重新校验。
+
+上述校验值对应使用本地 replacement 的开发产物。使用远程固定依赖重新构建时，应以该次产物附带的 `build-metadata.json` 和 `SHA256SUMS` 为准，不沿用开发产物的校验值。
 
 ## 兼容约束
 
