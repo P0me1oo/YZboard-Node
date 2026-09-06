@@ -264,7 +264,7 @@ func (o *Orchestrator) startNode(ctx context.Context, mn panel.MachineNode) {
 		return mb
 	}
 
-	cp := controlplane.NewMachinePanelControlPlane(perNodeClient, nodeCfg.Kernel, push, registerFn)
+	cp := controlplane.NewMachinePanelControlPlane(perNodeClient, push, registerFn)
 	svc := service.NewWithControlPlane(nodeCfg, cp)
 	svc.SetStatusHandler(func(status service.RuntimeStatus) {
 		o.setNodeStatus(mn.ID, status)
@@ -453,23 +453,8 @@ func (o *Orchestrator) onWSEvent(event panel.WSEvent) {
 		return
 	}
 
-	// Validate each event against the kernel selected for that node. A machine
-	// can run sing-box and Xray side by side, so the machine-level default is
-	// not sufficient here.
-	nodeKernel := o.cfg.Kernel.Type
-	o.mu.Lock()
-	if handle, ok := o.nodes[nodeID]; ok && handle.kernel != "" {
-		nodeKernel = handle.kernel
-	}
-	o.mu.Unlock()
-	nodeKcfg := o.cfg.Kernel
-	nodeKcfg.Type = nodeKernel
-	translated, err := controlplane.TranslateWSEvent(event, nodeKcfg)
-	if err != nil {
-		nlog.Core().Warn("machine ws event translation failed",
-			"type", event.Type, "node_id", nodeID, "error", err)
-		return
-	}
+	// 无效配置同样送到对应节点，由该节点停止内核并保留待修正状态。
+	translated := controlplane.TranslateWSEvent(event)
 
 	o.eventsMu.RLock()
 	mailbox, ok := o.mailboxes[nodeID]

@@ -251,7 +251,8 @@ func applyUserDelta(users *[]model.UserSpec, action string, delta []model.UserSp
 			}
 			filtered = append(filtered, user)
 		}
-		current = append([]model.UserSpec(nil), filtered...)
+		// 空快照表示删除全部用户，不能变成表示「没有更新」的 nil。
+		current = append([]model.UserSpec{}, filtered...)
 	default:
 		return false
 	}

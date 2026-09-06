@@ -41,11 +41,11 @@ func entryConfig() *model.NodeSpec {
 
 // The landing node has no panel users by design, so the kernel must still come up.
 func TestEnsureRunning_LandingStartsWithoutUsers(t *testing.T) {
-	k := &fakeKernel{}
+	k := &fakeKernel{protocols: []string{"shadowsocks"}}
 	s := newTestService(k)
 	s.lastConfig = landingConfig()
 
-	if !s.ensureRunning() {
+	if !s.ensureRunning(context.Background()) {
 		t.Fatal("landing kernel did not start with an empty user set")
 	}
 	if k.startCalls != 1 {
@@ -58,7 +58,7 @@ func TestEnsureRunning_PlainNodeStillNeedsUsers(t *testing.T) {
 	s := newTestService(k)
 	s.lastConfig = &model.NodeSpec{Protocol: "vless", ServerPort: 443}
 
-	if s.ensureRunning() {
+	if s.ensureRunning(context.Background()) {
 		t.Fatal("plain node started without users")
 	}
 	if k.startCalls != 0 {
@@ -68,7 +68,7 @@ func TestEnsureRunning_PlainNodeStillNeedsUsers(t *testing.T) {
 
 // A config re-sync must not shut a landing node down just because it reports no users.
 func TestApplyChanges_LandingSurvivesEmptyUserSet(t *testing.T) {
-	k := &fakeKernel{running: true}
+	k := &fakeKernel{running: true, protocols: []string{"shadowsocks"}}
 	s := newTestService(k)
 	s.lastConfig = landingConfig()
 	s.updateUserState(nil)

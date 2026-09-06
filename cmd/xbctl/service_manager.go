@@ -189,6 +189,7 @@ EnvironmentFile=-%s
 ExecStart=%s -c %s
 Restart=always
 RestartSec=5
+TimeoutStopSec=150s
 LimitNOFILE=1048576
 NoNewPrivileges=true
 StandardOutput=journal
@@ -212,6 +213,7 @@ output_log="%s"
 error_log="%s"
 respawn_delay=5
 respawn_max=0
+retry="TERM/150/KILL/5"
 no_new_privs=true
 rc_ulimit="-n 1048576"
 

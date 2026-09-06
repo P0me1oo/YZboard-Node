@@ -2,14 +2,12 @@ package xray
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/cedar2025/xboard-node/internal/config"
 	"github.com/cedar2025/xboard-node/internal/kernel"
 	"github.com/cedar2025/xboard-node/internal/model"
-	"github.com/xtls/xray-core/features/stats"
 )
 
 // relayLandingInboundTag is the tag of the internal inbound on a landing node.
@@ -276,139 +274,25 @@ func stringSetting(settings map[string]any, key string) string {
 	return value
 }
 
-// GetRelayTraffic returns cumulative per-logical-node traffic measured on the
-// entry's internal outbounds, keyed by logical node ID.
-//
-// The counters are read-and-reset like the user counters, so deltas are folded
-// into a cumulative map the tracker can diff. Shadowsocks framing makes these
-// numbers differ slightly from the user-level figures — they are a separate
-// operating metric, not a second billing source.
+// GetRelayTraffic 返回跨实例累计的逻辑节点流量，旧中转配置排空后仍保留已结算值。
 func (x *Xray) GetRelayTraffic(_ context.Context) (map[int][2]int64, error) {
-	if !x.running.Load() {
-		return nil, nil
-	}
-
 	x.mu.Lock()
 	defer x.mu.Unlock()
-
-	if x.instance == nil || !x.nodeConfig.IsRelayEntry() {
-		return nil, nil
-	}
-	tagToNode := x.nodeConfig.RelayNodeIDByTag()
-	if len(tagToNode) == 0 {
-		return nil, nil
-	}
-
-	sm := x.instance.GetFeature(stats.ManagerType())
-	if sm == nil {
-		return nil, nil
-	}
-	mgr, ok := sm.(stats.Manager)
-	if !ok {
-		return nil, nil
-	}
-
-	if x.cumRelayTraffic == nil {
-		x.cumRelayTraffic = make(map[int][2]int64, len(tagToNode))
-	}
-
-	out := make(map[int][2]int64, len(tagToNode))
-	for tag, nodeID := range tagToNode {
-		var dUp, dDown int64
-		if c := mgr.GetCounter(fmt.Sprintf("outbound>>>%s>>>traffic>>>uplink", tag)); c != nil {
-			dUp = c.Set(0)
-		}
-		if c := mgr.GetCounter(fmt.Sprintf("outbound>>>%s>>>traffic>>>downlink", tag)); c != nil {
-			dDown = c.Set(0)
-		}
-
-		if dUp > 0 || dDown > 0 {
-			cum := x.cumRelayTraffic[nodeID]
-			cum[0] += dUp
-			cum[1] += dDown
-			x.cumRelayTraffic[nodeID] = cum
-		}
-
-		if cum := x.cumRelayTraffic[nodeID]; cum[0] > 0 || cum[1] > 0 {
-			out[nodeID] = cum
-		}
-	}
-
-	if len(out) == 0 {
-		return nil, nil
-	}
-	return out, nil
+	x.collectStatsLocked()
+	return copyTraffic(x.cumRelayTraffic), nil
 }
 
-// GetRelayUserTraffic 返回入口路由链路按用户和逻辑节点累计的流量。
-// Xray 计数器使用认证邮箱和 VLESS 路由编号，本方法依据当前中转配置映射回节点 ID。
+// GetRelayUserTraffic 返回跨实例累计的用户-逻辑节点流量，不受当前用户集和节点角色影响。
 func (x *Xray) GetRelayUserTraffic(_ context.Context) (map[int]map[int][2]int64, error) {
-	if !x.running.Load() {
-		return nil, nil
-	}
-
 	x.mu.Lock()
 	defer x.mu.Unlock()
-
-	if x.instance == nil || x.nodeConfig == nil || !x.nodeConfig.IsRelayEntry() {
-		return nil, nil
-	}
-	routeToNode := make(map[int]int, len(x.nodeConfig.Relay.Children))
-	for _, child := range x.nodeConfig.Relay.Children {
-		if child.RouteID > 0 && child.NodeID > 0 {
-			routeToNode[child.RouteID] = child.NodeID
-		}
-	}
-	if len(routeToNode) == 0 || len(x.users) == 0 {
-		return nil, nil
-	}
-
-	sm := x.instance.GetFeature(stats.ManagerType())
-	if sm == nil {
-		return nil, nil
-	}
-	mgr, ok := sm.(stats.Manager)
-	if !ok {
-		return nil, nil
-	}
-
-	if x.cumRelayUserTraffic == nil {
-		x.cumRelayUserTraffic = make(map[int]map[int][2]int64, len(x.users))
-	}
+	x.collectStatsLocked()
 	out := make(map[int]map[int][2]int64)
-	for _, user := range x.users {
-		if user.ID <= 0 {
-			continue
-		}
-		email := userEmail(user.ID)
-		for routeID, nodeID := range routeToNode {
-			var deltaUp, deltaDown int64
-			if c := mgr.GetCounter(fmt.Sprintf("user>>>%s>>>relay>>>%d>>>traffic>>>uplink", email, routeID)); c != nil {
-				deltaUp = c.Set(0)
-			}
-			if c := mgr.GetCounter(fmt.Sprintf("user>>>%s>>>relay>>>%d>>>traffic>>>downlink", email, routeID)); c != nil {
-				deltaDown = c.Set(0)
-			}
-
-			if deltaUp > 0 || deltaDown > 0 {
-				cum := x.cumRelayUserTraffic[user.ID][nodeID]
-				cum[0] += deltaUp
-				cum[1] += deltaDown
-				if x.cumRelayUserTraffic[user.ID] == nil {
-					x.cumRelayUserTraffic[user.ID] = make(map[int][2]int64)
-				}
-				x.cumRelayUserTraffic[user.ID][nodeID] = cum
-			}
-
-			if cum := x.cumRelayUserTraffic[user.ID][nodeID]; cum[0] > 0 || cum[1] > 0 {
-				if out[user.ID] == nil {
-					out[user.ID] = make(map[int][2]int64)
-				}
-				out[user.ID][nodeID] = cum
-			}
+	for uid, nodes := range x.cumRelayUserTraffic {
+		if copied := copyTraffic(nodes); copied != nil {
+			out[uid] = copied
 		}
 	}
-
 	if len(out) == 0 {
 		return nil, nil
 	}

@@ -6,17 +6,18 @@
 
 | 项目 | 标识 |
 | --- | --- |
-| Node 源码目标版本 | `v1.13-yz.17`（尚未发布） |
+| Node 源码目标版本 | `v1.13-yz.19`（尚未发布） |
 | Node 发布版本 | `v1.13-yz.16` |
 | Node 适用分支 | `upgrade/singbox-v1.14.0` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | `v1.13-yz.17` 尚未发布 |
+| Node Release Tag 对应 commit | `v1.13-yz.19` 尚未发布 |
+| Node `yz.19` 修复基线 | `89c2753390356f51df3d8fc133ae8064fa8ed669` |
 | Node `yz.17` 验证构建 commit | `ada7bb60b18bf14b80e171030b82bc0f3412beb6` |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
-| Node Release 构建 | 最近已发布 `v1.13-yz.16`；`v1.13-yz.17` 双架构验证构建已完成，尚未发布 |
-| Node Docker 标签 | 本次尚未发布 `v1.13-yz.17` 镜像 |
-| Node Docker manifest | OCI index `sha256:f3e0895ebc04ac603158a5b96413e7695e5c7a1abd596ee864d7d4852b0b4665`；包含 `linux/amd64` 与 `linux/arm64` |
+| Node Release 构建 | 最近已发布 `v1.13-yz.16`；`v1.13-yz.19-test` 的 Node、xbctl 双架构开发构建已完成，尚未发布 |
+| Node Docker 标签 | 本次尚未发布 `v1.13-yz.19` 镜像 |
+| 最近已发布 Docker manifest（yz.16） | OCI index `sha256:f3e0895ebc04ac603158a5b96413e7695e5c7a1abd596ee864d7d4852b0b4665`；包含 `linux/amd64` 与 `linux/arm64` |
 | Node Docker OCI 标识 | 待发布 |
 | YZboard 兼容版本 | `1.9.0`（待发布；用户-落地流量归属需与 Node `v1.13-yz.16` 成套使用） |
 | 最近已发布 YZboard 兼容代码 | `cf698392cd0b0623876b5166ab31b10fea2cb889`（面板 `v1.4.0`） |
@@ -35,13 +36,35 @@
 | sing-box 模块校验值 | `h1:oyWPL6yHrnYmtLhvM54ygF0fuRbIxIKf5K42rPafUeU=` |
 | sing-box 验证依赖 | 正式 `go.mod` 使用远程固定 Tag；前期隔离实测使用同一兼容源码的本地 replacement |
 
-Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.5` 支持首版 Shadowsocks 中转，`yz.6` 至 `yz.9` 延续既有安装、出站和用户同步修订，`yz.10` 新增 VLESS 落地、VLESS Encryption 和当前 Xray 传输矩阵，`yz.11` 为安装器与 `xbctl` 增加 Alpine Linux/OpenRC 生命周期支持，`yz.12` 修复机器模式首个用户同步与失败回滚，`yz.13` 增加 REST/WS 双通道对账、ETag 事务回滚、配置应用重试和权威设备快照，`yz.14` 增加 SS2022 进程内时间校准、健康状态和主动诊断，`yz.15` 增加机器模式节点级内核选择并将代码层缺省统一为 Xray，`yz.16` 增加用户-落地节点流量归属上报。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
+Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.5` 支持首版 Shadowsocks 中转，`yz.6` 至 `yz.9` 延续既有安装、出站和用户同步修订，`yz.10` 新增 VLESS 落地、VLESS Encryption 和当前 Xray 传输矩阵，`yz.11` 为安装器与 `xbctl` 增加 Alpine Linux/OpenRC 生命周期支持，`yz.12` 修复机器模式首个用户同步与失败回滚，`yz.13` 增加 REST/WS 双通道对账、ETag 事务回滚和权威设备快照，`yz.14` 增加 SS2022 进程内时间校准、健康状态和主动诊断，`yz.15` 增加机器模式节点级内核选择，`yz.16` 增加用户-落地节点流量归属上报，`yz.19` 明确失败配置停止和健康失败状态，不自动恢复旧配置。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
 
 先前的 `v0.1.0-yz.1` Tag 保留用于审计，但其版本低于上游 `v1.13`，不作为部署或升级目标，也不创建对应 Release。
 
 `yz.17` 将 sing-box 官方基线更新为 `v1.14.0`，修复 UDP 统计、用户更新并发、稳定认证身份、路由更新回滚和 Mieru 监听生命周期。兼容源码与 Node 的 Xray 依赖独立；本次没有修改 YZboard 或 YZ-Xray-core。
 
-正式 `go.mod` 与 `go.sum` 已固定兼容核心的远程 Tag 和校验值。Node `v1.13-yz.17` 尚未发布，已完成的源码升级和构建验证不改变已发布版本或服务器安装版本。
+正式 `go.mod` 与 `go.sum` 已固定兼容核心的远程 Tag 和校验值。Node 当前目标 `v1.13-yz.19` 尚未发布，源码修复和构建验证不改变已发布版本或服务器安装版本。
+
+## `yz.19` 失败状态修复（2026-09-07）
+
+配置、协议、端口、出站或用户应用失败时，Node 直接记录包含操作、内核和底层原因的错误，停止当前内核并将节点健康状态标记为失败。面板最新的失败配置和用户快照会保留为待修正状态；相同失败快照不会被定时采样、REST 或 WebSocket 反复启动，只有配置或用户实际变化后才允许重新尝试。首次启动失败的进程继续保持控制通道和健康端点，等待修正后的面板配置。
+
+本次只修改 YZboard-Node，未修改 YZboard 或 YZ-Xray-core。详细行为和测试命令见 [Node 修复验证](docs/node-reliability-validation.md)。
+
+配置校验在节点服务内统一执行，REST、WebSocket 和首次同步均保留无效快照并停止对应内核；用户增删不能绕过配置或证书错误。删除问题用户会尝试启动剩余用户，单个节点或实例初始化失败不会取消同一进程的其他节点。整体健康端点返回 503 表示存在失败项，其他节点仍可继续转发。
+
+`yz.19` 最终开发验证已完成：Windows amd64 通过 17 个包、581 项测试及子测试；YT-HK Linux amd64 `-race` 通过 4 个包、326 项测试及子测试，失败、跳过和数据竞争均为 0。12 个实际进程场景通过，包括两种多节点模式下的端口冲突、无效出站与初始 HTTP 失败隔离，以及等待 18 秒的退出报告和失败重试。Node、xbctl 双架构构建和 amd64 运行时版本检查通过；arm64 未进行实机运行。验收包为 `runtime-validation.tar.xz`，大小 112501608 字节，SHA256 `e17cee6af46f8464cba0b16a66a6bd37493887c040edf7fa100a094a6de99910`。原有 7 个监听未变化，临时目录、测试进程和上传包已清理，Netcatty 会话已关闭。
+
+进程退出等待两分钟，安装器的 systemd/OpenRC 模板等待 150 秒。已有部署通过 xbctl 单独替换二进制时还需同步服务停止等待设置；Docker/Compose 也应设为 150 秒。发布 CI 核对完整来源提交、干净源码标识与双架构元数据，Docker 版本检查通过后才更新正式标签。
+
+## `yz.18` 可靠性修复（2026-09-06）
+
+本次只修改 Node，沿用上表中的 sing-box、Xray 固定依赖和既有面板接口。修复范围包括内核监听退役、出站应用与失败恢复、空用户同步、REST 用户重试、跨实例流量累计和退出上报。详细不变量、执行命令和验证状态见 [修复验证](docs/node-reliability-validation.md)。
+
+`yz.18` 构建来自上表基线的未提交修复，必须保留实际的 `vcs.modified=true` 标识。发布前需要提交、固定 Tag、重新构建并更新本表；下文 `yz.17` 的历史校验值不能用于本次修复产物。
+
+Windows amd64 全量测试通过：17 个包、555 项测试及子测试；`go vet` 与安装器脚本检查通过。YT-HK 上实际执行四个 Linux amd64 `-race` 测试包，共 301 项测试及子测试，全部通过、无跳过、无数据竞争。Node、xbctl 双架构构建和 amd64 运行时版本检查通过；arm64 尚未进行实机运行。测试产物和结果按 [修复验证](docs/node-reliability-validation.md) 归档，本次远程测试文件已清理。
+
+验证归档为 `yznode-v1.13-yz.18-test-linux-89c2753.tar.gz`，大小为 206497020 字节，SHA256 为 `7ced3892a85b142ff873efea731149123f3c61afb2287f0794b1c69d06a719a3`。归档包含八个二进制及其校验值、源码清单、构建元数据和本次 Linux 实测结果；逐文件校验值以包内 `SHA256SUMS` 为准。
 
 ## `yz.17` 固定依赖验证（2026-09-05）
 
@@ -122,7 +145,7 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 ## `yz.13` 同步兼容约束
 
 - WebSocket 仍用于即时推送，但 Node 在连接正常时至少每 5 分钟执行一次 REST ETag 对账；面板推送丢失不会再让配置或用户状态长期停留在旧版本。
-- 一次 REST 对账只有在配置、用户和配置规范化全部成功后才提交 ETag。内核应用失败时 Node 会恢复旧配置哈希并重置 ETag，下一轮重新获取相同配置。
+- 一次 REST 对账只有在配置、用户和配置规范化全部成功后才提交 ETag。内核应用失败时 Node 保留失败快照和失败状态，不会用旧配置继续运行；相同快照不自动重试，面板下发新配置或新用户状态后才重新应用。
 - Node 的 `alive` 和 `online` 都是权威全量快照。空对象表示没有在线设备或用户；YZboard `1.7.0` 会据此清理旧缓存并把在线人数写为 0。
 - 设备快照同时通过周期 HTTP 报告和 WebSocket 上报，两条路径读取同一份不可变快照，不再互相消耗。sing-box 的跨节点设备状态按 2 分钟判断过期。
 - 流量报告继续复用 `report_id`。YZboard `1.7.0` 会先持久化报告并在单个数据库事务中结算；升级面板时必须执行新增迁移，否则 Node 会持续保留并重试未被接受的批次。

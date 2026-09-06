@@ -8,34 +8,62 @@ import (
 	"testing"
 
 	"github.com/cedar2025/xboard-node/internal/config"
+	"github.com/cedar2025/xboard-node/internal/model"
 	panelapi "github.com/cedar2025/xboard-node/internal/panel"
 )
 
-func TestPanelControlPlaneInitialRejectsInvalidCustomOutbounds(t *testing.T) {
+func TestControlPlaneInitialPreservesInvalidCustomOutbounds(t *testing.T) {
 	server := newPanelTestServer(`{"protocol":"shadowsocks","server_port":8388,"custom_outbounds":[{"tag":"proxy","protocol":"socks","proxy_tag":"missing","settings":{"server":"2.2.2.2","server_port":1080}}]}`)
 	defer server.Close()
 
-	cp := NewPanelControlPlane(config.PanelConfig{URL: server.URL, Token: "token", NodeID: 1}, config.WSConfig{}, config.KernelConfig{Type: "singbox"})
-	_, err := cp.Initial(context.Background(), nil, nil, nil)
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), `initial config normalize: validate custom outbounds: custom_outbounds[0].proxy_tag references unknown outbound "missing"`) {
-		t.Fatalf("unexpected error: %v", err)
+	for name, cp := range snapshotControlPlanes(server.URL) {
+		t.Run(name, func(t *testing.T) {
+			snapshot, err := cp.Initial(context.Background(), nil, nil, nil)
+			if err != nil {
+				t.Fatalf("无效配置应交给节点处理，不能结束控制通道: %v", err)
+			}
+			assertInvalidOutboundSnapshot(t, snapshot.Config, "singbox", `proxy_tag references unknown outbound "missing"`)
+			if snapshot.Users == nil {
+				t.Fatal("初始用户快照丢失")
+			}
+		})
 	}
 }
 
-func TestPanelControlPlanePollRejectsInvalidCustomOutbounds(t *testing.T) {
+func TestControlPlanePollPreservesInvalidCustomOutbounds(t *testing.T) {
 	server := newPanelTestServer(`{"protocol":"shadowsocks","server_port":8388,"custom_outbounds":[{"tag":"proxy","protocol":"socks","proxy_tag":"missing","settings":{"server":"2.2.2.2","server_port":1080}}]}`)
 	defer server.Close()
 
-	cp := NewPanelControlPlane(config.PanelConfig{URL: server.URL, Token: "token", NodeID: 1}, config.WSConfig{}, config.KernelConfig{Type: "singbox"})
-	_, err := cp.Poll(context.Background())
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	for name, cp := range snapshotControlPlanes(server.URL) {
+		t.Run(name, func(t *testing.T) {
+			snapshot, err := cp.Poll(context.Background())
+			if err != nil {
+				t.Fatalf("已获取的无效配置不能伪装成网络错误: %v", err)
+			}
+			assertInvalidOutboundSnapshot(t, snapshot.Config, "singbox", `proxy_tag references unknown outbound "missing"`)
+			if snapshot.Users == nil {
+				t.Fatal("轮询用户快照丢失")
+			}
+		})
 	}
-	if !strings.Contains(err.Error(), `poll config normalize: validate custom outbounds: custom_outbounds[0].proxy_tag references unknown outbound "missing"`) {
-		t.Fatalf("unexpected error: %v", err)
+}
+
+func snapshotControlPlanes(url string) map[string]ControlPlane {
+	cfg := config.PanelConfig{URL: url, NodeID: 1}
+	return map[string]ControlPlane{
+		"node":    NewPanelControlPlane(cfg, config.WSConfig{}),
+		"machine": NewMachinePanelControlPlane(panelapi.NewClient(cfg), nil, nil),
+	}
+}
+
+func assertInvalidOutboundSnapshot(t *testing.T, spec *model.NodeSpec, kernelType, reason string) {
+	t.Helper()
+	if spec == nil || len(spec.CustomOutbounds) != 1 {
+		t.Fatal("控制通道丢失了待修正出站配置")
+	}
+	err := model.ValidateNodeSpec(spec, config.KernelConfig{Type: kernelType})
+	if err == nil || !strings.Contains(err.Error(), reason) {
+		t.Fatalf("节点仍应拒绝该快照，实际校验结果: %v", err)
 	}
 }
 
@@ -63,7 +91,7 @@ func TestPanelControlPlanePollRestoresETagsWhenUsersFail(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	cp := NewPanelControlPlane(config.PanelConfig{URL: server.URL, Token: "token", NodeID: 1}, config.WSConfig{}, config.KernelConfig{Type: "singbox"})
+	cp := NewPanelControlPlane(config.PanelConfig{URL: server.URL, NodeID: 1}, config.WSConfig{})
 	if _, err := cp.Poll(context.Background()); err == nil {
 		t.Fatal("expected first poll to fail")
 	}
@@ -101,7 +129,7 @@ func TestPanelControlPlanePollAcceptsNotModifiedSnapshot(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	cp := NewPanelControlPlane(config.PanelConfig{URL: server.URL, Token: "token", NodeID: 1}, config.WSConfig{}, config.KernelConfig{Type: "singbox"})
+	cp := NewPanelControlPlane(config.PanelConfig{URL: server.URL, NodeID: 1}, config.WSConfig{})
 	if _, err := cp.Poll(context.Background()); err != nil {
 		t.Fatalf("first poll failed: %v", err)
 	}
@@ -114,8 +142,8 @@ func TestPanelControlPlanePollAcceptsNotModifiedSnapshot(t *testing.T) {
 	}
 }
 
-func TestTranslateWSEventRejectsInvalidCustomOutbounds(t *testing.T) {
-	_, err := TranslateWSEvent(panelapi.WSEvent{
+func TestTranslateWSEventPreservesInvalidCustomOutbounds(t *testing.T) {
+	event := TranslateWSEvent(panelapi.WSEvent{
 		Type: panelapi.WSEventSyncConfig,
 		Config: &panelapi.NodeConfig{
 			Protocol:   "shadowsocks",
@@ -124,13 +152,8 @@ func TestTranslateWSEventRejectsInvalidCustomOutbounds(t *testing.T) {
 				{Tag: "proxy", Protocol: "socks", ProxyTag: "missing", Settings: map[string]any{"server": "2.2.2.2", "server_port": 1080}},
 			},
 		},
-	}, config.KernelConfig{Type: "singbox"})
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), `translate node config: validate custom outbounds: custom_outbounds[0].proxy_tag references unknown outbound "missing"`) {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	})
+	assertInvalidOutboundSnapshot(t, event.Config, "singbox", `proxy_tag references unknown outbound "missing"`)
 }
 
 func newPanelTestServer(configBody string) *httptest.Server {
@@ -150,8 +173,8 @@ func newPanelTestServer(configBody string) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-func TestTranslateWSEventRejectsUnsupportedProtocolForKernel(t *testing.T) {
-	_, err := TranslateWSEvent(panelapi.WSEvent{
+func TestTranslateWSEventPreservesUnsupportedProtocolForRuntimeValidation(t *testing.T) {
+	event := TranslateWSEvent(panelapi.WSEvent{
 		Type: panelapi.WSEventSyncConfig,
 		Config: &panelapi.NodeConfig{
 			Protocol:   "shadowsocks",
@@ -160,11 +183,6 @@ func TestTranslateWSEventRejectsUnsupportedProtocolForKernel(t *testing.T) {
 				{Tag: "hy2", Protocol: "hysteria2", Settings: map[string]any{"server": "2.2.2.2", "server_port": 8443}},
 			},
 		},
-	}, config.KernelConfig{Type: "xray"})
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), `translate node config: validate custom outbounds: custom_outbounds[0].protocol "hysteria2" is not supported by kernel "xray"`) {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	})
+	assertInvalidOutboundSnapshot(t, event.Config, "xray", `protocol "hysteria2" is not supported by kernel "xray"`)
 }

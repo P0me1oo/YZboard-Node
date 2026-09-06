@@ -15,16 +15,20 @@ Node backend for [YZboard](https://github.com/P0me1oo/YZboard). Supports `sing-b
 - Machine mode: each panel node can select Xray or sing-box independently; Xray is the default
 - 时间校准：为依赖时间戳的 Shadowsocks 2022 链路提供进程内 NTP 校准
 - sing-box：`yz.17` 以官方 `v1.14.0` 为基线，固定使用 `P0me1oo/YZ-sing-box v1.14.0-yz.1`，保留用户和路由热更新、Mieru；发布状态见 [兼容矩阵](YZ_COMPATIBILITY.md)，运行和安装验收方法见 [升级验证](docs/singbox-v1.14-validation.md)
+- 可靠性：`yz.19` 让配置、重载和用户应用失败直接进入停止/失败状态，不自动恢复旧配置；同时保留空用户同步、内核重载和退出流量结算修复，验证范围与 Linux 测试方法见 [修复验证](docs/node-reliability-validation.md)
+- 故障隔离：单个节点端口冲突或配置错误只停止自身，其他节点继续服务；整体 `/healthz` 返回 503 表示至少有一项失败，不代表所有节点停止。
 
 ## Install
 
 ### Docker
 
 ```bash
-docker run -d --restart=always --network=host \
+docker run -d --restart=always --network=host --stop-timeout=150 \
   -e apiHost=https://panel.com -e apiKey=TOKEN -e nodeID=1 \
   ghcr.io/p0me1oo/yzboard-node:latest
 ```
+
+退出时进程最多等待两分钟，完成在途报告、失败批次重试和最后流量上报。Compose 部署应设置 `stop_grace_period: 150s`，避免容器提前被强制结束。
 
 ### Installer（Linux systemd / OpenRC）
 
@@ -59,6 +63,8 @@ sudo xbctl upgrade --version latest
 
 `latest` 只解析 GitHub 最新正式 Release。需要回滚时显式传入旧 Tag，例如
 `sudo xbctl upgrade --version v1.13-yz.2`。
+
+`yz.19` 的安装器和服务模板将停止等待时间设为 150 秒。已有部署若只通过 `xbctl upgrade` 替换二进制，需要另行同步服务的停止等待设置：systemd 为 `TimeoutStopSec=150s`，OpenRC 为 `retry="TERM/150/KILL/5"`；也可以使用上面的安装器升级命令重新生成标准服务文件。重新生成前请保留已有的服务自定义设置。
 
 ## xbctl
 

@@ -142,6 +142,7 @@ func TestOpenRCServiceDefinition(t *testing.T) {
 		"supervisor=supervise-daemon",
 		"respawn_delay=5",
 		"respawn_max=0",
+		"retry=\"TERM/150/KILL/5\"",
 		"key=${line%%=*}",
 		"export \"${key}=${value}\"",
 		"checkpath -f -m 0640",
@@ -152,5 +153,15 @@ func TestOpenRCServiceDefinition(t *testing.T) {
 	}
 	if strings.Contains(script, "source ") || strings.Contains(script, ". "+defaultCredentialsPath) {
 		t.Fatal("OpenRC service definition must not execute credentials.env as a shell script")
+	}
+}
+
+func TestSystemdServiceDefinitionAllowsFinalReports(t *testing.T) {
+	_, content, _, err := serviceDefinitionFor(serviceManagerSystemd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "TimeoutStopSec=150s") {
+		t.Fatal("systemd 停止超时必须覆盖进程的两分钟退出等待")
 	}
 }

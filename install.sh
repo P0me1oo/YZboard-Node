@@ -737,6 +737,7 @@ output_log="${OPENRC_LOG_PATH}"
 error_log="${OPENRC_LOG_PATH}"
 respawn_delay=5
 respawn_max=0
+retry="TERM/150/KILL/5"
 no_new_privs=true
 rc_ulimit="-n 1048576"
 
@@ -786,6 +787,7 @@ EnvironmentFile=-${CREDENTIALS_FILE}
 ExecStart=${BINARY_PATH} -c ${CONFIG_FILE}
 Restart=always
 RestartSec=5
+TimeoutStopSec=150s
 LimitNOFILE=1048576
 NoNewPrivileges=true
 StandardOutput=journal

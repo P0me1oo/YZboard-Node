@@ -1,23 +1,26 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-LDFLAGS := -s -w -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME) -X main.commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+LDFLAGS := -s -w -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME) -X main.commit=$(COMMIT)
+BUILD_FLAGS := -mod=readonly -trimpath -buildvcs=true
+BUILD_TAGS := with_quic with_utls with_wireguard with_acme with_clash_api
 
 .PHONY: build clean test docker install build-linux build-linux-arm64 build-all
 
 # Build for current platform
 build:
-	go build -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_clash_api" -o xboard-node ./cmd/xboard-node
-	go build -ldflags "$(LDFLAGS)" -o xbctl ./cmd/xbctl
+	go build $(BUILD_FLAGS) -ldflags "$(LDFLAGS)" -tags "$(BUILD_TAGS)" -o xboard-node ./cmd/xboard-node
+	go build $(BUILD_FLAGS) -ldflags "$(LDFLAGS)" -o xbctl ./cmd/xbctl
 
 # Build for Linux amd64
 build-linux:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o xboard-node-linux-amd64 ./cmd/xboard-node
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o xbctl-linux-amd64 ./cmd/xbctl
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(BUILD_FLAGS) -ldflags "$(LDFLAGS)" -tags "$(BUILD_TAGS)" -o xboard-node-linux-amd64 ./cmd/xboard-node
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(BUILD_FLAGS) -ldflags "$(LDFLAGS)" -o xbctl-linux-amd64 ./cmd/xbctl
 
 # Build for Linux arm64
 build-linux-arm64:
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o xboard-node-linux-arm64 ./cmd/xboard-node
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o xbctl-linux-arm64 ./cmd/xbctl
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(BUILD_FLAGS) -ldflags "$(LDFLAGS)" -tags "$(BUILD_TAGS)" -o xboard-node-linux-arm64 ./cmd/xboard-node
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(BUILD_FLAGS) -ldflags "$(LDFLAGS)" -o xbctl-linux-arm64 ./cmd/xbctl
 
 # Build all platforms
 build-all: build-linux build-linux-arm64
@@ -25,7 +28,7 @@ build-all: build-linux build-linux-arm64
 # Run tests
 test:
 	bash tests/install_service_manager_test.sh
-	go test -v -race -count=1 -tags "with_quic with_utls with_wireguard with_acme with_clash_api" ./...
+	go test -mod=readonly -v -race -count=1 -tags "$(BUILD_TAGS)" ./...
 
 # Clean build artifacts
 clean:
@@ -33,7 +36,7 @@ clean:
 
 # Build Docker image
 docker:
-	docker build -t xboard-node:$(VERSION) -t xboard-node:latest .
+	docker build --build-arg NODE_VERSION=$(VERSION) --build-arg SOURCE_COMMIT=$(COMMIT) -t xboard-node:$(VERSION) -t xboard-node:latest .
 
 # Install to system (single node, legacy compat)
 install: build

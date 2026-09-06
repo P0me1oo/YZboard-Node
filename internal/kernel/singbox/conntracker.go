@@ -32,8 +32,7 @@ var ipPool = sync.Pool{
 // Traffic counters are lock-free atomics (read on every packet).
 // IP tracking uses a lightweight mutex (only touched at connect/disconnect).
 type userStats struct {
-	upload   atomic.Int64
-	download atomic.Int64
+	*userTraffic
 
 	mu        sync.RWMutex   // RWMutex for concurrent reads
 	ips       map[string]int // sourceIP → refcount (number of active conns from that IP)
@@ -123,6 +122,7 @@ func (u *userStats) aliveIPList() map[string]bool {
 //   - Close callback to decrement IP refcounts
 //   - Per-connection rate limit token accumulation (amortized WaitN)
 type ConnTracker struct {
+	traffic *trafficTotals
 	usersMu sync.RWMutex
 	users   map[int]*userStats  // userID → stats
 	uuidMap map[string]int      // UUID → userID (for lookup in RoutedConnection)
@@ -147,6 +147,7 @@ const globalDeviceStateTTL = 2 * time.Minute
 // NewConnTracker creates a tracker.
 func NewConnTracker(_ int) *ConnTracker {
 	return &ConnTracker{
+		traffic:       newTrafficTotals(),
 		users:         make(map[int]*userStats),
 		uuidMap:       make(map[string]int),
 		connMap:       make(map[string]net.Conn),
@@ -172,7 +173,7 @@ func (t *ConnTracker) SetUserMap(m map[string]int) {
 	t.uuidMap = m
 	for _, uid := range m {
 		if _, ok := t.users[uid]; !ok {
-			t.users[uid] = &userStats{ips: make(map[string]int)}
+			t.users[uid] = &userStats{userTraffic: t.traffic.user(uid), ips: make(map[string]int)}
 		}
 	}
 	t.usersMu.Unlock()

@@ -28,6 +28,9 @@ var (
 	commit    = "unknown"
 )
 
+// 退出最多需要等待在途报告、失败重试和最终报告各 30 秒，以及内核排空。
+const shutdownGracePeriod = 2 * time.Minute
+
 func main() {
 	configPath := flag.String("c", "config.yml", "config file path")
 	showVersion := flag.Bool("v", false, "show version")
@@ -145,7 +148,7 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 			case errCh <- err:
 			default:
 			}
-			cancel()
+			// 单个节点或实例初始化失败不取消其他节点的共享上下文。
 		}
 		doneCh := make(chan struct{})
 		var wg sync.WaitGroup
@@ -209,7 +212,7 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 			cancel()
 			if sig, shuttingDown := waitForReloadStop(doneCh, sigCh); shuttingDown {
 				nlog.Core().Info(fmt.Sprintf("received %v during reload, shutting down...", sig))
-				forceExitIfNeeded(waitForShutdown(doneCh, sigCh, 15*time.Second))
+				forceExitIfNeeded(waitForShutdown(doneCh, sigCh, shutdownGracePeriod))
 				if watcher != nil {
 					watcher.Stop()
 				}
@@ -219,7 +222,7 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 		case sig := <-sigCh:
 			nlog.Core().Info(fmt.Sprintf("received %v, shutting down...", sig))
 			cancel()
-			forceExitIfNeeded(waitForShutdown(doneCh, sigCh, 15*time.Second))
+			forceExitIfNeeded(waitForShutdown(doneCh, sigCh, shutdownGracePeriod))
 			if watcher != nil {
 				watcher.Stop()
 			}
@@ -228,6 +231,7 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 		case <-doneCh:
 		}
 
+		cancel()
 		if watcher != nil {
 			watcher.Stop()
 		}
@@ -290,7 +294,7 @@ func forceExitIfNeeded(result shutdownResult) {
 		nlog.Core().Warn("received second signal, forcing exit")
 		os.Exit(1)
 	case shutdownTimedOut:
-		nlog.Core().Error("shutdown timed out after 15s, forcing exit")
+		nlog.Core().Error("shutdown timed out, forcing exit", "timeout", shutdownGracePeriod)
 		os.Exit(2)
 	}
 }

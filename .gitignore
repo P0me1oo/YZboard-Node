@@ -1,7 +1,10 @@
 # Binaries
 /xboard-node
 /xboard-node-linux-*
+/xbctl
+/xbctl-linux-*
 *.exe
+__pycache__/
 
 # Config files (may contain secrets)
 config.yml

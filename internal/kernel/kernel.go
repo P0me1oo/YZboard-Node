@@ -84,6 +84,7 @@ type Kernel interface {
 	// per-user atomic counters — no per-connection iteration needed.
 	// aliveIPs maps userID → set of source IPs currently connected.
 	// traffic maps userID → [upload, download] cumulative bytes.
+	// 累计计数跟随 Kernel 对象，不因 Start、Reload、Stop 清零；Stop 后仍可读取最终值。
 	// connCount is the total number of active connections (for metrics).
 	GetUserTraffic(ctx context.Context) (traffic map[int][2]int64, aliveIPs map[int]map[string]bool, connCount int, err error)
 	// CloseConnection terminates a specific connection by ID.

@@ -5,22 +5,27 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cedar2025/xboard-node/internal/cert"
 	"github.com/cedar2025/xboard-node/internal/config"
+	"github.com/cedar2025/xboard-node/internal/controlplane"
 	"github.com/cedar2025/xboard-node/internal/kernel"
 	"github.com/cedar2025/xboard-node/internal/limiter"
 	"github.com/cedar2025/xboard-node/internal/model"
+	"github.com/cedar2025/xboard-node/internal/tracker"
 	"golang.org/x/time/rate"
 )
 
 type fakeKernel struct {
-	running bool
+	running   bool
+	protocols []string
 
 	startErr  error
 	reloadErr error
 	updateErr error
 	addErr    error
+	removeErr error
 
 	startCalls  int
 	reloadCalls int
@@ -37,8 +42,23 @@ type fakeKernel struct {
 	deviceLimitFunc func(string) (int, bool)
 }
 
-func (f *fakeKernel) Name() string                      { return "fake" }
-func (f *fakeKernel) Protocols() []string               { return []string{"vless"} }
+type certRenewalPollSource struct {
+	controlplane.ControlPlane
+	pollErr error
+}
+
+func (p *certRenewalPollSource) SupportsPolling() bool { return true }
+func (p *certRenewalPollSource) Poll(context.Context) (controlplane.Snapshot, error) {
+	return controlplane.Snapshot{}, p.pollErr
+}
+
+func (f *fakeKernel) Name() string { return "fake" }
+func (f *fakeKernel) Protocols() []string {
+	if f.protocols != nil {
+		return f.protocols
+	}
+	return []string{"vless"}
+}
 func (f *fakeKernel) Capabilities() kernel.Capabilities { return kernel.Capabilities{} }
 func (f *fakeKernel) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
 	_, _, _ = nodeConfig, users, tls
@@ -73,6 +93,9 @@ func (f *fakeKernel) RemoveUsers(users []model.UserSpec) (int, error) {
 	if f.onRemoveUsers != nil {
 		f.onRemoveUsers(users)
 	}
+	if f.removeErr != nil {
+		return 0, f.removeErr
+	}
 	return len(users), nil
 }
 func (f *fakeKernel) UpdateUsers(users []model.UserSpec) (int, int, error) {
@@ -105,7 +128,9 @@ func (f *fakeKernel) ClearGlobalDevices()                                  {}
 func newTestService(k *fakeKernel) *Service {
 	sharedLimiter := limiter.New()
 	s := &Service{
+		cfg:          &config.Config{Kernel: config.KernelConfig{Type: "xray"}},
 		kernel:       k,
+		tracker:      tracker.New(),
 		limiter:      sharedLimiter,
 		speedTracker: limiter.NewSpeedTracker(sharedLimiter),
 		cert:         cert.NewManager(config.CertConfig{}),
@@ -115,14 +140,57 @@ func newTestService(k *fakeKernel) *Service {
 	return s
 }
 
-func TestApplyConfigUpdateRestoresHashAfterReloadAndRestartFailure(t *testing.T) {
+func TestPullConsumesCertRenewalOnlyAfterSuccessfulPoll(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		pollErr   error
+		wantCalls int
+		wantEvent bool
+	}{
+		{name: "poll failure", pollErr: errors.New("panel unavailable")},
+		{name: "poll success", wantCalls: 1, wantEvent: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := newTestService(&fakeKernel{})
+			s.source = &certRenewalPollSource{pollErr: test.pollErr}
+			s.pullResults = make(chan pullResult, 1)
+			calls := 0
+			s.certRenewed = func() bool {
+				calls++
+				return true
+			}
+
+			s.pullViaAPIAsync(context.Background())
+			deadline := time.Now().Add(time.Second)
+			for s.pullActive.Load() && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if s.pullActive.Load() {
+				t.Fatal("REST 轮询未结束")
+			}
+			if calls != test.wantCalls {
+				t.Fatalf("证书续期标记读取次数 = %d，预期 %d", calls, test.wantCalls)
+			}
+			select {
+			case result := <-s.pullResults:
+				if !test.wantEvent || !result.certChanged {
+					t.Fatalf("轮询结果中的续期状态不正确: %#v", result)
+				}
+			default:
+				if test.wantEvent {
+					t.Fatal("成功轮询未返回证书续期结果")
+				}
+			}
+		})
+	}
+}
+
+func TestApplyConfigUpdateStopsWithoutRestoringOldKernel(t *testing.T) {
 	k := &fakeKernel{
 		running:   true,
 		reloadErr: errors.New("reload failed"),
-		startErr:  errors.New("restart failed"),
 	}
 	s := newTestService(k)
-	s.cfg = &config.Config{}
 	s.lastUsers = []model.UserSpec{{ID: 1, UUID: "uuid-1"}}
 	oldConfig := &model.NodeSpec{Protocol: "vless", ServerPort: 1001}
 	newConfig := &model.NodeSpec{Protocol: "vless", ServerPort: 1002}
@@ -132,24 +200,79 @@ func TestApplyConfigUpdateRestoresHashAfterReloadAndRestartFailure(t *testing.T)
 	if s.applyConfigUpdate(context.Background(), newConfig, computeConfigHash(newConfig)) {
 		t.Fatal("expected config apply to fail")
 	}
-	if s.lastConfig != oldConfig {
-		t.Fatalf("lastConfig = %#v, want old config", s.lastConfig)
+	if s.lastConfig != newConfig {
+		t.Fatalf("lastConfig = %#v, want failed config", s.lastConfig)
 	}
-	if s.lastConfigHash != computeConfigHash(oldConfig) {
-		t.Fatalf("lastConfigHash = %q, want old hash", s.lastConfigHash)
+	if s.lastConfigHash != computeConfigHash(newConfig) {
+		t.Fatalf("lastConfigHash = %q, want failed config hash", s.lastConfigHash)
+	}
+	if k.running {
+		t.Fatal("kernel remained running after failed reload")
+	}
+	if s.runtimeError == nil {
+		t.Fatal("runtime failure was not recorded")
 	}
 
 	k.reloadErr = nil
-	k.startErr = nil
-	if !s.applyConfigUpdate(context.Background(), newConfig, computeConfigHash(newConfig)) {
-		t.Fatal("expected same config to be retried successfully")
+	if s.applyConfigUpdate(context.Background(), newConfig, computeConfigHash(newConfig)) {
+		t.Fatal("same failed config must remain blocked")
 	}
-	if s.lastConfigHash != computeConfigHash(newConfig) {
-		t.Fatalf("lastConfigHash = %q, want new hash", s.lastConfigHash)
+	if k.startCalls != 0 {
+		t.Fatalf("same failed config triggered Start %d times", k.startCalls)
+	}
+
+	changed := &model.NodeSpec{Protocol: "vless", ServerPort: 1003}
+	if !s.applyConfigUpdate(context.Background(), changed, computeConfigHash(changed)) {
+		t.Fatal("changed config should be allowed to start")
+	}
+	if k.startCalls != 1 || !k.running {
+		t.Fatalf("changed config did not start kernel: calls=%d running=%v", k.startCalls, k.running)
 	}
 }
 
-func TestTrackAndEnforceRestartsUnexpectedlyStoppedKernel(t *testing.T) {
+func TestApplyConfigUpdateStopsWhenRemoteCertificateConfigFails(t *testing.T) {
+	k := &fakeKernel{running: true}
+	s := newTestService(k)
+	s.lastUsers = []model.UserSpec{{ID: 1, UUID: "uuid-1"}}
+	configWithBadCert := &model.NodeSpec{
+		Protocol:   "vless",
+		ServerPort: 1004,
+		CertConfig: &config.CertConfig{CertMode: "unsupported-test-mode"},
+	}
+
+	if s.applyConfigUpdate(context.Background(), configWithBadCert, computeConfigHash(configWithBadCert)) {
+		t.Fatal("invalid remote certificate configuration must fail")
+	}
+	if k.running {
+		t.Fatal("kernel remained running after remote certificate failure")
+	}
+	if k.reloadCalls != 0 || k.startCalls != 0 {
+		t.Fatalf("kernel was applied after certificate failure: reload=%d start=%d", k.reloadCalls, k.startCalls)
+	}
+	if s.runtimeError == nil || !strings.Contains(s.runtimeError.Error(), "runtime certificate configuration") {
+		t.Fatalf("runtime certificate failure was not recorded: %v", s.runtimeError)
+	}
+}
+
+func TestWSConfigValidationFailureStopsKernelAndKeepsPendingConfig(t *testing.T) {
+	k := &fakeKernel{running: true}
+	s := newTestService(k)
+	s.lastConfig = &model.NodeSpec{Protocol: "vless", ServerPort: 1001}
+	s.lastConfigHash = computeConfigHash(s.lastConfig)
+	s.updateUserState([]model.UserSpec{{ID: 1, UUID: "uuid-1"}})
+
+	bad := &model.NodeSpec{Protocol: "unsupported", ServerPort: 1002}
+	s.handleWSEvent(context.Background(), controlplane.Event{Type: controlplane.EventSyncConfig, Config: bad})
+
+	if s.lastConfig != bad || s.lastConfigHash != computeConfigHash(bad) {
+		t.Fatalf("failed config was not retained: config=%#v hash=%q", s.lastConfig, s.lastConfigHash)
+	}
+	if k.running || s.runtimeError == nil {
+		t.Fatalf("validation failure did not stop runtime: running=%v error=%v", k.running, s.runtimeError)
+	}
+}
+
+func TestTrackAndEnforceDoesNotStartUnexpectedlyStoppedKernel(t *testing.T) {
 	k := &fakeKernel{}
 	s := newTestService(k)
 	s.lastConfig = &model.NodeSpec{Protocol: "vless", ServerPort: 1001}
@@ -157,8 +280,8 @@ func TestTrackAndEnforceRestartsUnexpectedlyStoppedKernel(t *testing.T) {
 
 	s.trackAndEnforce(context.Background())
 
-	if !k.running || k.startCalls != 1 {
-		t.Fatalf("kernel running=%v startCalls=%d, want one recovery start", k.running, k.startCalls)
+	if k.running || k.startCalls != 0 {
+		t.Fatalf("traffic sampling restarted kernel: running=%v startCalls=%d", k.running, k.startCalls)
 	}
 }
 
@@ -217,28 +340,43 @@ func TestApplyUserUpdateStartsStoppedKernelForFirstUsers(t *testing.T) {
 	}
 }
 
-func TestApplyUserUpdateRetriesAfterInitialKernelStartFailure(t *testing.T) {
+func TestApplyUserUpdateKeepsFailedSnapshotWithoutRetry(t *testing.T) {
 	k := &fakeKernel{startErr: errors.New("start failed")}
 	s := newTestService(k)
 	s.lastConfig = &model.NodeSpec{Protocol: "vless"}
 	oldUsers := []model.UserSpec{{ID: 1, UUID: "uuid-old", SpeedLimit: 4}}
 	s.updateUserState(oldUsers)
-	oldHash := s.lastUserHash
-
 	newUsers := []model.UserSpec{{ID: 2, UUID: "uuid-new", SpeedLimit: 8}}
-	s.applyUserUpdate(context.Background(), newUsers, computeUserHash(newUsers))
+	if s.applyUserUpdate(context.Background(), newUsers, computeUserHash(newUsers)) {
+		t.Fatal("expected initial start to fail")
+	}
 
 	if got := k.startCalls; got != 1 {
 		t.Fatalf("Start call count = %d, want 1", got)
 	}
-	if len(s.lastUsers) != 1 || s.lastUsers[0].UUID != "uuid-old" {
-		t.Fatalf("lastUsers = %#v, want old users after failed start", s.lastUsers)
+	if len(s.lastUsers) != 1 || s.lastUsers[0].UUID != "uuid-new" {
+		t.Fatalf("lastUsers = %#v, want failed users to remain pending", s.lastUsers)
 	}
-	if s.lastUserHash != oldHash {
-		t.Fatalf("lastUserHash = %q, want %q for retry", s.lastUserHash, oldHash)
+	if s.lastUserHash != computeUserHash(newUsers) {
+		t.Fatalf("lastUserHash = %q, want failed user hash", s.lastUserHash)
 	}
-	if s.speedTracker.GetLimiter("uuid-new") != nil {
-		t.Fatal("expected failed user's limiter to be removed after rollback")
+	if s.speedTracker.GetLimiter("uuid-new") == nil {
+		t.Fatal("expected failed user's limiter to remain pending")
+	}
+	if s.applyUserUpdate(context.Background(), newUsers, computeUserHash(newUsers)) {
+		t.Fatal("same failed user snapshot must remain blocked")
+	}
+	if k.startCalls != 1 {
+		t.Fatalf("same failed user snapshot retried Start: calls=%d", k.startCalls)
+	}
+
+	k.startErr = nil
+	changedUsers := []model.UserSpec{{ID: 3, UUID: "uuid-corrected", SpeedLimit: 8}}
+	if !s.applyUserUpdate(context.Background(), changedUsers, computeUserHash(changedUsers)) {
+		t.Fatal("changed user snapshot should be allowed to start")
+	}
+	if k.startCalls != 2 || !k.running {
+		t.Fatalf("changed user snapshot did not start kernel: calls=%d running=%v", k.startCalls, k.running)
 	}
 }
 
@@ -264,63 +402,68 @@ func TestApplyUserDeltaStartsStoppedKernelForFirstUser(t *testing.T) {
 	}
 }
 
-func TestApplyUserDeltaRetriesAfterInitialKernelStartFailure(t *testing.T) {
+func TestApplyUserDeltaKeepsFailedSnapshotWithoutRetry(t *testing.T) {
 	k := &fakeKernel{startErr: errors.New("start failed")}
 	s := newTestService(k)
 	s.lastConfig = &model.NodeSpec{Protocol: "vless"}
 	oldUsers := []model.UserSpec{{ID: 1, UUID: "uuid-old", SpeedLimit: 4}}
 	s.updateUserState(oldUsers)
-	oldHash := s.lastUserHash
-
-	s.applyUserDelta(
+	if s.applyUserDelta(
 		context.Background(),
 		"add",
 		[]model.UserSpec{{ID: 2, UUID: "uuid-new", SpeedLimit: 8}},
-	)
+	) {
+		t.Fatal("expected initial start to fail")
+	}
 
 	if got := k.startCalls; got != 1 {
 		t.Fatalf("Start call count = %d, want 1", got)
 	}
-	if len(s.lastUsers) != 1 || s.lastUsers[0].UUID != "uuid-old" {
-		t.Fatalf("lastUsers = %#v, want old users after failed start", s.lastUsers)
+	if len(s.lastUsers) != 2 {
+		t.Fatalf("lastUsers = %#v, want merged failed users to remain pending", s.lastUsers)
 	}
-	if s.lastUserHash != oldHash {
-		t.Fatalf("lastUserHash = %q, want %q for retry", s.lastUserHash, oldHash)
+	if s.lastUserHash != computeUserHash(s.lastUsers) {
+		t.Fatalf("lastUserHash = %q, want failed user hash", s.lastUserHash)
 	}
-	if s.speedTracker.GetLimiter("uuid-new") != nil {
-		t.Fatal("expected failed delta user's limiter to be removed after rollback")
+	if s.speedTracker.GetLimiter("uuid-new") == nil {
+		t.Fatal("expected failed delta user's limiter to remain pending")
+	}
+	if s.applyUserDelta(context.Background(), "add", []model.UserSpec{{ID: 2, UUID: "uuid-new", SpeedLimit: 8}}) {
+		t.Fatal("same failed delta must remain blocked")
+	}
+	if k.startCalls != 1 {
+		t.Fatalf("same failed delta retried Start: calls=%d", k.startCalls)
 	}
 }
 
-func TestApplyUserUpdateRestoresStateWhenKernelAndRestartFail(t *testing.T) {
+func TestApplyUserUpdateStopsWhenKernelUpdateFails(t *testing.T) {
 	k := &fakeKernel{
 		running:   true,
 		updateErr: errors.New("update failed"),
-		startErr:  errors.New("restart failed"),
 	}
 	s := newTestService(k)
 	s.lastConfig = &model.NodeSpec{Protocol: "vless"}
 	oldUsers := []model.UserSpec{{ID: 1, UUID: "uuid-old", SpeedLimit: 4}}
 	s.updateUserState(oldUsers)
-	oldHash := s.lastUserHash
-
 	newUsers := []model.UserSpec{{ID: 2, UUID: "uuid-new", SpeedLimit: 8}}
-	s.applyUserUpdate(context.Background(), newUsers, computeUserHash(newUsers))
+	if s.applyUserUpdate(context.Background(), newUsers, computeUserHash(newUsers)) {
+		t.Fatal("expected user update to fail")
+	}
 
-	if got := k.startCalls; got != 1 {
-		t.Fatalf("Start call count = %d, want 1", got)
+	if got := k.startCalls; got != 0 {
+		t.Fatalf("failed user update triggered restart: calls=%d", got)
 	}
-	if len(s.lastUsers) != 1 || s.lastUsers[0].UUID != "uuid-old" {
-		t.Fatalf("lastUsers = %#v, want restored old users", s.lastUsers)
+	if k.running {
+		t.Fatal("kernel remained running after failed user update")
 	}
-	if s.lastUserHash != oldHash {
-		t.Fatalf("lastUserHash = %q, want %q", s.lastUserHash, oldHash)
+	if len(s.lastUsers) != 1 || s.lastUsers[0].UUID != "uuid-new" {
+		t.Fatalf("lastUsers = %#v, want failed users to remain pending", s.lastUsers)
 	}
-	if s.speedTracker.GetLimiter("uuid-old") == nil {
-		t.Fatal("expected old limiter to be restored after rollback")
+	if s.speedTracker.GetLimiter("uuid-new") == nil {
+		t.Fatal("expected failed user's limiter to remain pending")
 	}
-	if s.speedTracker.GetLimiter("uuid-new") != nil {
-		t.Fatal("expected new limiter to be removed after rollback")
+	if s.runtimeError == nil {
+		t.Fatal("runtime failure was not recorded")
 	}
 }
 
@@ -378,7 +521,7 @@ func TestApplyUserDeltaUUIDChangeUsesFullUpdate(t *testing.T) {
 	}
 }
 
-func TestApplyUserDeltaUUIDChangeRestartsKernelWhenFullUpdateFails(t *testing.T) {
+func TestApplyUserDeltaUUIDChangeStopsWhenFullUpdateFails(t *testing.T) {
 	k := &fakeKernel{
 		running:   true,
 		updateErr: errors.New("update failed"),
@@ -393,50 +536,49 @@ func TestApplyUserDeltaUUIDChangeRestartsKernelWhenFullUpdateFails(t *testing.T)
 		[]model.UserSpec{{ID: 15, UUID: "uuid-new", SpeedLimit: 4}},
 	)
 
-	if got := k.startCalls; got != 1 {
-		t.Fatalf("Start call count = %d, want 1", got)
+	if got := k.startCalls; got != 0 {
+		t.Fatalf("UUID update triggered restart: calls=%d", got)
 	}
-	if len(k.startUsers) != 1 || k.startUsers[0].UUID != "uuid-new" {
-		t.Fatalf("restart users = %#v, want rotated UUID", k.startUsers)
+	if k.running {
+		t.Fatal("kernel remained running after failed UUID update")
 	}
 	if len(s.lastUsers) != 1 || s.lastUsers[0].UUID != "uuid-new" {
-		t.Fatalf("lastUsers = %#v, want rotated UUID after successful restart", s.lastUsers)
+		t.Fatalf("lastUsers = %#v, want rotated UUID to remain pending", s.lastUsers)
 	}
 }
 
-func TestApplyUserDeltaUUIDChangeRestoresStateWhenRestartFails(t *testing.T) {
+func TestApplyUserDeltaUUIDChangeKeepsFailedState(t *testing.T) {
 	k := &fakeKernel{
 		running:   true,
 		updateErr: errors.New("update failed"),
-		startErr:  errors.New("restart failed"),
 	}
 	s := newTestService(k)
 	s.lastConfig = &model.NodeSpec{Protocol: "vless"}
 	oldUsers := []model.UserSpec{{ID: 15, UUID: "uuid-old", SpeedLimit: 4}}
 	s.updateUserState(oldUsers)
-	oldHash := s.lastUserHash
-
-	s.applyUserDelta(
+	if s.applyUserDelta(
 		context.Background(),
 		"add",
 		[]model.UserSpec{{ID: 15, UUID: "uuid-new", SpeedLimit: 4}},
-	)
+	) {
+		t.Fatal("expected UUID update to fail")
+	}
 
-	if got := k.startCalls; got != 1 {
-		t.Fatalf("Start call count = %d, want 1", got)
+	if got := k.startCalls; got != 0 {
+		t.Fatalf("failed UUID update triggered restart: calls=%d", got)
 	}
-	if len(s.lastUsers) != 1 || s.lastUsers[0].UUID != "uuid-old" {
-		t.Fatalf("lastUsers = %#v, want old UUID after rollback", s.lastUsers)
+	if k.running {
+		t.Fatal("kernel remained running after failed UUID update")
 	}
-	if s.lastUserHash != oldHash {
-		t.Fatalf("lastUserHash = %q, want %q after rollback", s.lastUserHash, oldHash)
+	if len(s.lastUsers) != 1 || s.lastUsers[0].UUID != "uuid-new" {
+		t.Fatalf("lastUsers = %#v, want new UUID to remain pending", s.lastUsers)
 	}
-	if s.speedTracker.GetLimiter("uuid-new") != nil {
-		t.Fatal("expected failed UUID limiter to be removed after rollback")
+	if s.speedTracker.GetLimiter("uuid-new") == nil {
+		t.Fatal("expected failed UUID limiter to remain pending")
 	}
 }
 
-func TestApplyUserDeltaRestartsKernelWhenAddAndFullUpdateFail(t *testing.T) {
+func TestApplyUserDeltaStopsWhenAddAndFullUpdateFail(t *testing.T) {
 	k := &fakeKernel{
 		running:   true,
 		addErr:    errors.New("add failed"),
@@ -450,14 +592,14 @@ func TestApplyUserDeltaRestartsKernelWhenAddAndFullUpdateFail(t *testing.T) {
 	delta := []model.UserSpec{{ID: 2, UUID: "uuid-new", SpeedLimit: 8}}
 	s.applyUserDelta(context.Background(), "add", delta)
 
-	if got := k.startCalls; got != 1 {
-		t.Fatalf("Start call count = %d, want 1", got)
+	if got := k.startCalls; got != 0 {
+		t.Fatalf("failed add triggered restart: calls=%d", got)
 	}
-	if len(k.startUsers) != 2 {
-		t.Fatalf("restart users = %#v, want complete merged user set", k.startUsers)
+	if k.running {
+		t.Fatal("kernel remained running after failed add")
 	}
 	if len(s.lastUsers) != 2 || s.speedTracker.GetLimiter("uuid-new") == nil {
-		t.Fatalf("service state was not retained after successful restart: %#v", s.lastUsers)
+		t.Fatalf("failed merged user state was not retained: %#v", s.lastUsers)
 	}
 }
 

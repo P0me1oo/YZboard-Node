@@ -24,6 +24,7 @@ render_service
 sh -n "$TMP_DIR/service"
 grep -F 'supervisor=supervise-daemon' "$TMP_DIR/service" >/dev/null
 grep -F 'respawn_max=0' "$TMP_DIR/service" >/dev/null
+grep -F 'retry="TERM/150/KILL/5"' "$TMP_DIR/service" >/dev/null
 grep -F 'key=${line%%=*}' "$TMP_DIR/service" >/dev/null
 grep -F 'export "${key}=${value}"' "$TMP_DIR/service" >/dev/null
 if grep -F '. /etc/xboard-node/credentials.env' "$TMP_DIR/service" >/dev/null; then
@@ -37,5 +38,6 @@ SERVICE_MANAGER="systemd"
 render_service
 grep -F 'EnvironmentFile=-/etc/xboard-node/credentials.env' "$TMP_DIR/service" >/dev/null
 grep -F 'Restart=always' "$TMP_DIR/service" >/dev/null
+grep -F 'TimeoutStopSec=150s' "$TMP_DIR/service" >/dev/null
 
 echo "installer service-manager tests passed"
