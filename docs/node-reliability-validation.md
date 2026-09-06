@@ -47,6 +47,8 @@ sing-box 完整重建最多等待已有连接五秒，剩余连接可能中断�
 
 每个验收二进制的实际模块、目标架构、构建参数和 SHA256 记录在 `build-metadata.json`；149 份 Go 源码及模块文件记录在 `source-manifest.json`，打包前已逐项核对。Node 二进制同时确认使用 `./compat/sing-anytls`。正式发布从固定 Git 提交重新构建，CI 检查 `vcs.modified=false`、来源提交及目标架构，Release 附带 `.buildinfo.txt` 和 `SHA256SUMS`。Docker 使用相同工具链和五个功能标签，版本检查通过后才更新正式版本与 latest 标签。
 
+镜像运行验证从固定 OCI index 中分别解析 amd64、arm64 的唯一 manifest 摘要，再按对应摘要执行版本命令，避免 Docker 本地镜像存储在同一 index 摘要下切换架构时发生冲突；arm64 使用 QEMU 执行。
+
 ## 复现命令
 
 ```bash

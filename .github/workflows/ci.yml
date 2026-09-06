@@ -190,8 +190,12 @@ jobs:
           BUILD_VERSION: ${{ inputs.release_tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || needs.test.outputs.source_sha }}
         run: |
           set -euo pipefail
+          image_index=$(docker buildx imagetools inspect "ghcr.io/p0me1oo/yzboard-node@$IMAGE_DIGEST" --raw)
           for arch in amd64 arm64; do
-            version_output=$(docker run --rm --platform "linux/$arch" "ghcr.io/p0me1oo/yzboard-node@$IMAGE_DIGEST" -v)
+            platform_digest=$(jq -er --arg arch "$arch" \
+              '.manifests | map(select(.platform.os == "linux" and .platform.architecture == $arch)) | if length == 1 then .[0].digest else error("expected exactly one platform manifest") end' \
+              <<< "$image_index")
+            version_output=$(docker run --rm --platform "linux/$arch" "ghcr.io/p0me1oo/yzboard-node@$platform_digest" -v)
             printf '%s\n' "$version_output"
             grep -Fq "xboard-node ${BUILD_VERSION} (built " <<< "$version_output"
             grep -Fq "commit ${SOURCE_COMMIT})" <<< "$version_output"
