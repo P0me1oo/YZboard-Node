@@ -6,19 +6,20 @@
 
 | 项目 | 标识 |
 | --- | --- |
-| Node 源码目标版本 | `v1.13-yz.19`（尚未发布） |
-| Node 发布版本 | `v1.13-yz.16` |
+| Node 源码目标版本 | `v1.13-yz.19` |
+| Node 发布版本 | `v1.13-yz.19` |
 | Node 适用分支 | `upgrade/singbox-v1.14.0` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | `v1.13-yz.19` 尚未发布 |
+| Node Release Tag 对应 commit | `v1.13-yz.19` / `d22037477a7e97825990eb35e41d12926c117680` |
 | Node `yz.19` 修复基线 | `89c2753390356f51df3d8fc133ae8064fa8ed669` |
 | Node `yz.17` 验证构建 commit | `ada7bb60b18bf14b80e171030b82bc0f3412beb6` |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
-| Node Release 构建 | 最近已发布 `v1.13-yz.16`；`v1.13-yz.19-test` 的 Node、xbctl 双架构开发构建已完成，尚未发布 |
-| Node Docker 标签 | 本次尚未发布 `v1.13-yz.19` 镜像 |
-| 最近已发布 Docker manifest（yz.16） | OCI index `sha256:f3e0895ebc04ac603158a5b96413e7695e5c7a1abd596ee864d7d4852b0b4665`；包含 `linux/amd64` 与 `linux/arm64` |
-| Node Docker OCI 标识 | 待发布 |
+| Node Release 构建 | Node、xbctl 的 `linux/amd64` 与 `linux/arm64` 安装包、安装器、四份构建元数据和 SHA256SUMS 共 10 个附件已发布 |
+| Node Docker 标签 | `ghcr.io/p0me1oo/yzboard-node:v1.13-yz.19` 与 `latest` 指向同一已验证镜像 |
+| Node Docker manifest（yz.19） | OCI index `sha256:8b65c52c0c0f59a24c56ab48ced7a1dda9a07c6948edc3f454b41c140d999818`；包含 `linux/amd64` 与 `linux/arm64` |
+| 上一正式 Docker manifest（yz.16） | OCI index `sha256:f3e0895ebc04ac603158a5b96413e7695e5c7a1abd596ee864d7d4852b0b4665`；用于回滚版本审计 |
+| Node Docker OCI 标识 | `revision=d22037477a7e97825990eb35e41d12926c117680`；`version=v1.13-yz.19` |
 | YZboard 兼容版本 | `1.9.0`（待发布；用户-落地流量归属需与 Node `v1.13-yz.16` 成套使用） |
 | 最近已发布 YZboard 兼容代码 | `cf698392cd0b0623876b5166ab31b10fea2cb889`（面板 `v1.4.0`） |
 | Xray 官方仓库 | `XTLS/Xray-core` |
@@ -44,7 +45,25 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 
 `yz.17` 将 sing-box 官方基线更新为 `v1.14.0`，修复 UDP 统计、用户更新并发、稳定认证身份、路由更新回滚和 Mieru 监听生命周期。兼容源码与 Node 的 Xray 依赖独立；本次没有修改 YZboard 或 YZ-Xray-core。
 
-正式 `go.mod` 与 `go.sum` 已固定兼容核心的远程 Tag 和校验值。Node 当前目标 `v1.13-yz.19` 尚未发布，源码修复和构建验证不改变已发布版本或服务器安装版本。
+正式 `go.mod` 与 `go.sum` 已固定两个主内核的远程版本和校验值；AnyTLS 兼容源码随 Node 提交固定。Node `v1.13-yz.19` 已发布，服务器安装版本由用户执行升级后改变。
+
+## `yz.19` 正式发布（2026-09-07）
+
+发布提交为 `d22037477a7e97825990eb35e41d12926c117680`。[发布前 CI](https://github.com/P0me1oo/YZboard-Node/actions/runs/34066413890) 与 [正式发布 CI](https://github.com/P0me1oo/YZboard-Node/actions/runs/34066869570) 均通过，两个架构的镜像版本命令与来源提交一致；arm64 镜像运行检查使用 QEMU。
+
+[GitHub Release](https://github.com/P0me1oo/YZboard-Node/releases/tag/v1.13-yz.19) 包含 10 个附件。安装包的 Go 1.26.4、Linux 架构、`CGO_ENABLED=0`、五个 Node 功能标签、实际模块和 `vcs.modified=false` 已核对；发布附件摘要与 SHA256SUMS 一致。完整构建信息和校验值以 Release 附件为准。
+
+| 安装产物 | SHA256 |
+| --- | --- |
+| `xboard-node-linux-amd64` | `4b6334e15854da2b9ddbc5557a52bc43bc12e986b56c6a3d50516dcb760dd078` |
+| `xboard-node-linux-arm64` | `f755ee4c76dd30fd57da40a0f3753373e4eef609d682387ab7327fb64c2f06f7` |
+| `xbctl-linux-amd64` | `b3a4e0805ffbb6edd4262b576129083d39971a3707fc4c911839c797e71db1b6` |
+| `xbctl-linux-arm64` | `9ab77eff9cc7f6c2bfb9139c07599d9211038a35a3d85aeed392722f3609193c` |
+| `install.sh` | `19d5556a52da021209f10ad88d06d26e7050747df2ba00a778f08e66a1c2372a` |
+
+固定镜像引用为 `ghcr.io/p0me1oo/yzboard-node@sha256:8b65c52c0c0f59a24c56ab48ced7a1dda9a07c6948edc3f454b41c140d999818`。`v1.13-yz.19` 与 `latest` 均指向该 index；amd64 manifest 为 `sha256:826ac2d52b00bef1510080bb79f9b76dc12bd8844ad3856f38cf3a5fa5c0cb54`，arm64 manifest 为 `sha256:d93cee9e308cfa77c448031f992ade9e45042647b0edc313ee6041dffc09f064`。两份镜像配置中的 OCI revision 和 version 均与本次发布一致。
+
+上一正式 Node 版本为 `v1.13-yz.16`。本次未执行生产服务器升级；升级时同步服务停止等待时间为 150 秒，具体要求见下文。
 
 ## `yz.19` 失败状态修复（2026-09-07）
 
