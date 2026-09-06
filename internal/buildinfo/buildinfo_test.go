@@ -36,6 +36,8 @@ func TestReportContainsForkAndDependencyIdentity(t *testing.T) {
 		SingBoxRequestedVersion,
 		SingBoxResolvedVersion,
 		SingBoxUpstreamCommit,
+		AnyTLSUpstreamVersion,
+		AnyTLSUpstreamCommit,
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report %q does not contain %q", report, want)

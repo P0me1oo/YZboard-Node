@@ -29,6 +29,7 @@ build-all: build-linux build-linux-arm64
 test:
 	bash tests/install_service_manager_test.sh
 	go test -mod=readonly -v -race -count=1 -tags "$(BUILD_TAGS)" ./...
+	go test -mod=readonly -v -race -count=1 github.com/anytls/sing-anytls/session
 
 # Clean build artifacts
 clean:

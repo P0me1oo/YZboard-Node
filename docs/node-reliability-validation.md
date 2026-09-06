@@ -4,6 +4,8 @@
 
 sing-box 继续固定为 `github.com/P0me1oo/YZ-sing-box v1.14.0-yz.1`；Xray 继续固定为 `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260903142229-601226e180d3`。面板配置、用户、报告格式和 Xray 中转计数器名称保持兼容。
 
+首次发布前 [CI](https://github.com/P0me1oo/YZboard-Node/actions/runs/34061908602) 在 AnyTLS 用户删除测试中发现上游 `v0.0.11` 的关闭状态数据竞争，阻止了发布。`v0.0.13` 仍保留同样的未保护访问，因此 Node 使用 [固定上游源码的兼容补丁](../compat/sing-anytls/README.yz.md)，只修改流关闭状态和回调访问的两个源文件；原许可证、作者和原始文件校验值保留。原有测试要求没有放宽。
+
 ## 运行行为
 
 | 场景 | 行为 |
@@ -28,9 +30,10 @@ sing-box 完整重建最多等待已有连接五秒，剩余连接可能中断�
 
 | 检查 | 结果 |
 | --- | --- |
-| Windows amd64 全量测试 | 17 个测试包、581 项测试及子测试通过，无失败、无跳过 |
+| Windows amd64 全量测试 | 18 个测试包、586 项测试及子测试通过，无失败、无跳过，包含 AnyTLS 兼容包 |
 | 静态及脚本检查 | Go vet、安装器服务模板测试、Bash/Python 语法、CI actionlint 通过 |
-| YT-HK Linux amd64 并发检测 | 4 个包、326 项测试及子测试通过，无失败、无跳过、无数据竞争 |
+| YT-HK Linux amd64 并发检测 | 5 个包、331 项测试及子测试通过，无失败、无跳过、无数据竞争 |
+| AnyTLS 重复并发检测 | 底层关闭测试 50 轮、真实用户生命周期 20 轮全部通过，无跳过、无数据竞争 |
 | 首次端口冲突 | 进程与健康端点存活；相同快照只启动一次，修正端口后恢复实际传输 |
 | 证书与无效出站 | 坏证书不能被用户更新绕过；初始和运行中无效出站均停止监听，修正后恢复实际传输 |
 | 慢报告正常返回 | SIGTERM 后等待约 18 秒，退出码 0，发送两个批次并保留尾部流量 |
@@ -38,17 +41,18 @@ sing-box 完整重建最多等待已有连接五秒，剩余连接可能中断�
 | 两节点故障隔离 | 机器模式和传统 nodes 模式各验证端口冲突、无效初始出站、初始 HTTP 失败；6 个场景中健康节点均继续传输 |
 | 双架构构建 | Node、xbctl 的 linux/amd64 与 linux/arm64 构建及元数据检查通过；amd64 版本命令在测试机运行通过 |
 
-并发检测包分别通过 controlplane 18 项、service 59 项、singbox 126 项、xray 123 项。额外的实际进程验收共 12 个场景全部通过。配置与用户恢复测试还覆盖 WebSocket 转换、机器邮箱、REST ETag 对账、增量删除和 UUID 变更。
+并发检测包分别通过 controlplane 18 项、service 59 项、singbox 126 项、xray 123 项、anytls 5 项。AnyTLS 底层重复测试共通过 250 项测试及子测试，真实用户生命周期重复测试共通过 40 项测试及子测试。额外的实际进程验收共 12 个场景全部通过。配置与用户恢复测试还覆盖 WebSocket 转换、机器邮箱、REST ETag 对账、增量删除和 UUID 变更。
 
-本轮使用 Go 1.26.4。验收应用标识为 `v1.13-yz.19-test`、基线提交加 `-dirty`；`go version -m` 保留真实的 `vcs.modified=true`。四个 Linux 并发检测程序使用 `-race`、Zig 0.14.1 和 glibc 2.31 目标。验收包 `runtime-validation.tar.xz` 为 112501608 字节，SHA256 为 `e17cee6af46f8464cba0b16a66a6bd37493887c040edf7fa100a094a6de99910`，不作为正式安装包。
+本轮使用 Go 1.26.4。最终验收应用标识为 `v1.13-yz.19-test`、`d257b4db9d4d74ad6ac6994fea78d7302eb126ce-dirty`；`go version -m` 保留真实的 `vcs.modified=true`。五个 Linux 并发检测程序使用 `-race`、Zig 0.14.1 和 glibc 2.31 目标。验收包 `runtime-validation.tar.xz` 为 130250888 字节，SHA256 为 `aa3f59474867e7c727beb793af1186044b44ab97dee2298da40f49bcbd67f424`，不作为正式安装包。
 
-每个验收二进制的实际模块、目标架构、构建参数和 SHA256 记录在 `build-metadata.json`；129 份 Go 源码及模块文件记录在 `source-manifest.json`，打包前已逐项核对。正式发布从固定 Git 提交重新构建，CI 检查 `vcs.modified=false`、来源提交及目标架构，Release 附带 `.buildinfo.txt` 和 `SHA256SUMS`。Docker 使用相同工具链和五个功能标签，版本检查通过后才更新正式版本与 latest 标签。
+每个验收二进制的实际模块、目标架构、构建参数和 SHA256 记录在 `build-metadata.json`；149 份 Go 源码及模块文件记录在 `source-manifest.json`，打包前已逐项核对。Node 二进制同时确认使用 `./compat/sing-anytls`。正式发布从固定 Git 提交重新构建，CI 检查 `vcs.modified=false`、来源提交及目标架构，Release 附带 `.buildinfo.txt` 和 `SHA256SUMS`。Docker 使用相同工具链和五个功能标签，版本检查通过后才更新正式版本与 latest 标签。
 
 ## 复现命令
 
 ```bash
 go test -mod=readonly -p=2 -count=1 -timeout=5m \
   -tags 'with_quic with_utls with_wireguard with_acme with_clash_api' ./...
+go test -mod=readonly -race -count=1 github.com/anytls/sing-anytls/session
 go vet -mod=readonly -p=2 \
   -tags 'with_quic with_utls with_wireguard with_acme with_clash_api' ./...
 bash tests/install_service_manager_test.sh
@@ -62,9 +66,12 @@ sha256sum --check --strict SHA256SUMS
 unshare --net --fork python3 run_linux_regressions.py --artifacts "$PWD"
 unshare --net --fork python3 runtime_failure_probe.py --artifacts "$PWD"
 unshare --net --fork python3 multi_node_failure_probe.py --artifacts "$PWD"
+unshare --net --fork python3 repeat_anytls.py
 ```
 
-`run_linux_regressions.py` 需要四个 `*-linux-amd64.test` 程序；后两个脚本需要 `xboard-node-linux-amd64`。这三个脚本都拒绝在主机原网络空间运行，使用独立测试身份、临时目录、回环监听和模拟面板。报告只保留结果与计数，原始日志和凭据不落入报告。
+`run_linux_regressions.py` 需要五个 `*-linux-amd64.test` 程序，分别为 controlplane、service、singbox、xray、anytls；后两个脚本需要 `xboard-node-linux-amd64`。这三个脚本都拒绝在主机原网络空间运行，使用独立测试身份、临时目录、回环监听和模拟面板。报告只保留结果与计数，原始日志和凭据不落入报告。
+
+验收包内的 `repeat_anytls.py` 在相同隔离环境中额外执行 50 轮 Stream 关闭回归和 20 轮 `TestSingBoxRuntimeUserLifecycle/anytls`，仅保存状态和计数。
 
 ## 部署停止等待时间
 

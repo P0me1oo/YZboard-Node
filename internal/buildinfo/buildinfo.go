@@ -17,6 +17,10 @@ const (
 	SingBoxRequestedVersion = "v1.14.0"
 	SingBoxResolvedVersion  = "v1.14.0-yz.1"
 	SingBoxUpstreamCommit   = "0b8995879f29a9b98ee027bc17b75e101445b238"
+
+	// AnyTLS 关闭状态补丁随 Node 源码固定，上游版本单独标识。
+	AnyTLSUpstreamVersion = "v0.0.11"
+	AnyTLSUpstreamCommit  = "130d2e61b8895727bfed4942c535e91b246a9603"
 )
 
 // ModuleVersion 返回构建产物中嵌入的模块版本。
@@ -46,7 +50,8 @@ func Report(binary, version, buildTime, commit string) string {
 	return fmt.Sprintf(
 		"%s %s (built %s, commit %s)\n"+
 			"xray-core: fork %s (upstream %s @ %s; fork commit %s; module %s)\n"+
-			"sing-box: requested %s, resolved %s (upstream commit %s; module %s)",
+			"sing-box: requested %s, resolved %s (upstream commit %s; module %s)\n"+
+			"anytls: upstream %s @ %s; Node compatibility source %s",
 		binary,
 		version,
 		buildTime,
@@ -60,5 +65,8 @@ func Report(binary, version, buildTime, commit string) string {
 		SingBoxResolvedVersion,
 		SingBoxUpstreamCommit,
 		ModuleVersion("github.com/sagernet/sing-box"),
+		AnyTLSUpstreamVersion,
+		AnyTLSUpstreamCommit,
+		ModuleVersion("github.com/anytls/sing-anytls"),
 	)
 }

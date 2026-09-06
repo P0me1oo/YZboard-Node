@@ -13,7 +13,7 @@ import tempfile
 import time
 
 
-PACKAGES = ("controlplane", "service", "singbox", "xray")
+PACKAGES = ("controlplane", "service", "singbox", "xray", "anytls")
 
 
 def main():

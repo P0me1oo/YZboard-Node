@@ -298,6 +298,9 @@ require (
 
 replace github.com/sagernet/sing-box => github.com/P0me1oo/YZ-sing-box v1.14.0-yz.1
 
+// 上游 v0.0.11 的流关闭状态存在数据竞争；兼容补丁随 Node 固定提交构建。
+replace github.com/anytls/sing-anytls => ./compat/sing-anytls
+
 // 上游 v26.7.11 没有对应的 Go module Tag；保留兼容的 require 版本，
 // 并将实际依赖固定到 YZ fork 的发布提交，避免解析到移动分支。
 replace github.com/xtls/xray-core => github.com/P0me1oo/YZ-Xray-core v0.0.0-20260903142229-601226e180d3

@@ -35,6 +35,8 @@
 | sing-box 兼容 Tag / commit | `v1.14.0-yz.1` / `f47d4d565a4371cf46b6c462612fc085f634a6af` |
 | sing-box 模块校验值 | `h1:oyWPL6yHrnYmtLhvM54ygF0fuRbIxIKf5K42rPafUeU=` |
 | sing-box 验证依赖 | 正式 `go.mod` 使用远程固定 Tag；前期隔离实测使用同一兼容源码的本地 replacement |
+| AnyTLS 上游基线 | `anytls/sing-anytls v0.0.11` / `130d2e61b8895727bfed4942c535e91b246a9603` |
+| AnyTLS 实际 replacement | `./compat/sing-anytls`，随 Node 固定提交构建；仅修复流关闭状态和回调的并发访问，来源与移除条件见 [补丁说明](compat/sing-anytls/README.yz.md) |
 
 Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.5` 支持首版 Shadowsocks 中转，`yz.6` 至 `yz.9` 延续既有安装、出站和用户同步修订，`yz.10` 新增 VLESS 落地、VLESS Encryption 和当前 Xray 传输矩阵，`yz.11` 为安装器与 `xbctl` 增加 Alpine Linux/OpenRC 生命周期支持，`yz.12` 修复机器模式首个用户同步与失败回滚，`yz.13` 增加 REST/WS 双通道对账、ETag 事务回滚和权威设备快照，`yz.14` 增加 SS2022 进程内时间校准、健康状态和主动诊断，`yz.15` 增加机器模式节点级内核选择，`yz.16` 增加用户-落地节点流量归属上报，`yz.19` 明确失败配置停止和健康失败状态，不自动恢复旧配置。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
 
@@ -52,7 +54,9 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 
 配置校验在节点服务内统一执行，REST、WebSocket 和首次同步均保留无效快照并停止对应内核；用户增删不能绕过配置或证书错误。删除问题用户会尝试启动剩余用户，单个节点或实例初始化失败不会取消同一进程的其他节点。整体健康端点返回 503 表示存在失败项，其他节点仍可继续转发。
 
-`yz.19` 最终开发验证已完成：Windows amd64 通过 17 个包、581 项测试及子测试；YT-HK Linux amd64 `-race` 通过 4 个包、326 项测试及子测试，失败、跳过和数据竞争均为 0。12 个实际进程场景通过，包括两种多节点模式下的端口冲突、无效出站与初始 HTTP 失败隔离，以及等待 18 秒的退出报告和失败重试。Node、xbctl 双架构构建和 amd64 运行时版本检查通过；arm64 未进行实机运行。验收包为 `runtime-validation.tar.xz`，大小 112501608 字节，SHA256 `e17cee6af46f8464cba0b16a66a6bd37493887c040edf7fa100a094a6de99910`。原有 7 个监听未变化，临时目录、测试进程和上传包已清理，Netcatty 会话已关闭。
+首次发布前 CI 在 AnyTLS 用户删除测试中捕获上游 `dieErr`、`dieHook` 数据竞争，因此未发布该构建。Node 内增加固定上游源码的最小兼容补丁，保留完整生命周期测试，并单独执行依赖包的并发测试。两个主内核的固定版本未变；AnyTLS 本地 replacement 的身份由 Node 提交及原始文件校验清单共同记录。
+
+`yz.19` 最终开发验证已完成：Windows amd64 通过 18 个包、586 项测试及子测试；YT-HK Linux amd64 `-race` 通过 5 个包、331 项测试及子测试，失败、跳过和数据竞争均为 0。AnyTLS 底层关闭回归重复 50 轮、真实用户生命周期重复 20 轮全部通过。12 个实际进程场景通过，包括两种多节点模式下的端口冲突、无效出站与初始 HTTP 失败隔离，以及等待 18 秒的退出报告和失败重试。Node、xbctl 双架构构建和 amd64 运行时版本检查通过；arm64 未进行实机运行。验收包为 `runtime-validation.tar.xz`，大小 130250888 字节，SHA256 `aa3f59474867e7c727beb793af1186044b44ab97dee2298da40f49bcbd67f424`。原有 7 个监听未变化，临时目录、测试进程和上传包已清理，Netcatty 会话已关闭。
 
 进程退出等待两分钟，安装器的 systemd/OpenRC 模板等待 150 秒。已有部署通过 xbctl 单独替换二进制时还需同步服务停止等待设置；Docker/Compose 也应设为 150 秒。发布 CI 核对完整来源提交、干净源码标识与双架构元数据，Docker 版本检查通过后才更新正式标签。
 

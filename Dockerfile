@@ -11,6 +11,7 @@ RUN apk add --no-cache git
 WORKDIR /build
 
 COPY go.mod go.sum ./
+COPY compat/sing-anytls/go.mod ./compat/sing-anytls/go.mod
 RUN go mod download
 
 COPY . .
