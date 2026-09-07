@@ -26,10 +26,10 @@
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
 | Xray 上游 Tag commit | `50231eaff98ccc31b5cbd247a721c16e97fe5ec1` |
-| YZ-Xray-core 源码 Tag | `v26.7.11-yz.5` |
-| YZ-Xray-core 当前已固定版本 / commit | `v26.7.11-yz.5` / `dcb690846b525851f0ee8dc47388e110d4600042` |
-| Node 当前 Xray replace | `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260907183145-dcb690846b52` |
-| YZboard 兼容标识 | `xray-v26.7.11-yz.5`（面板 `1.11.0`） |
+| YZ-Xray-core 源码 Tag | `v26.7.11-yz.6` |
+| YZ-Xray-core 当前已固定版本 / commit | `v26.7.11-yz.6` / `b4caa82d6414196565599c19ebc1b53e331349b6` |
+| Node 当前 Xray replace | `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260907200713-b4caa82d6414` |
+| YZboard 兼容标识 | `xray-v26.7.11-yz.6`（面板 `1.11.0`） |
 | sing-box `require` 版本 | `v1.14.0` |
 | sing-box 实际 replacement | `github.com/P0me1oo/YZ-sing-box v1.14.0-yz.2` |
 | sing-box 官方基线 | `v1.14.0` / `0b8995879f29a9b98ee027bc17b75e101445b238` |
@@ -54,7 +54,7 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 
 本轮在上述源码起点的未提交 HY2 实现上继续开发，配套面板为 `1.11.0`。sing-box 支持
 VLESS/HY2 入口和 Shadowsocks/VLESS 落地，可与 Xray 混用。
-2026-09-08 固定 Xray `v26.7.11-yz.5` 和 sing-box `v1.14.0-yz.2`，更新 `go.mod`、`go.sum` 和构建标识。
+2026-09-08 固定 Xray `v26.7.11-yz.6` 和 sing-box `v1.14.0-yz.2`，更新 `go.mod`、`go.sum` 和构建标识。
 用户身份按「用户 × 线路」展开，以原生 `auth_user` 规则选路，再映射回真实用户进行限速、设备限制和计费。
 
 认证、用户映射和路由更新按过渡规则协调；删除或轮换用户后，旧 HY2 会话的新请求不能退回默认出站。
@@ -65,13 +65,15 @@ sing-box 的线路总量按实际出站上的用户有效载荷计算，Xray 保
 不支持 VLESS Encryption、TCP 头部伪装及无效 Vision 组合。使用步骤见 [中转说明](docs-relay.md)，
 本轮运行、两机测试、性能测量和构建记录见 [sing-box 中转验证](docs/singbox-relay-validation.md)。
 
-Xray `yz.5` 保留 VLESS 首批缓冲上传计数修复，并同步 UDP 缓存读取与关闭。sing-box `yz.2` 同步 gRPC 初始化与关闭，修复 SS2022 多用户兼容副本的关闭逻辑；原 SS2022 模块的同一修复随 Node 源码固定。用户套餐和用户-线路明细继续使用原有计数路径。
+Xray `yz.6` 保留 VLESS 首批缓冲上传计数修复，并同步 UDP 缓存及 HY2 会话的关闭状态。sing-box `yz.2` 同步 gRPC 初始化与关闭，修复 SS2022 多用户兼容副本的关闭逻辑；原 SS2022 模块的同一修复随 Node 源码固定。用户套餐和用户-线路明细继续使用原有计数路径。
 
-修复前，新增用例复现三类数据竞争。修复后四个相关包各连续 10 轮 `-race` 通过，共 180 项测试及子测试执行。Windows/amd64 的 Node 完整普通测试通过：17 个有测试的包、609 项测试及子测试，无失败或测试跳过；面板 57 项测试、549 个断言通过。
+原三类修复在 Xray `yz.5` 阶段分别由新增用例复现，修复后四个相关包各连续 10 轮 `-race` 通过，共 180 项测试及子测试执行。该阶段 Windows/amd64 的 Node 完整普通测试通过：17 个有测试的包、609 项测试及子测试，无失败或测试跳过；面板 57 项测试、549 个断言通过。
 
 Linux/amd64 完整 sing-box 包并发检测耗时 126.042 秒，142 项测试及子测试全部通过，无跳过、无竞争报告；此前失败的混合内核与 gRPC 分支全部保留。YT-HK、DGN-HK 使用修复后依赖完成 60 次转发及生命周期请求，覆盖 TCP/UDP、用户增删、重复同步、重载和停止恢复。原 Xray `yz.4` 下的失败结果保留在验证文档的历史部分。
 
 上述本地及双机测试使用待发布工作区。正式 Node 安装包和镜像由发布 CI 检出固定提交构建，并核对实际模块、目标架构、来源提交和 `vcs.modified=false`。升级时先更新相关 Node，再更新面板并启用新拓扑；上一正式版本用于回滚。
+
+发布前完整 Node 并发检测 [run 34155848942](https://github.com/P0me1oo/YZboard-Node/actions/runs/34155848942) 在 HY2 会话关闭处发现另一类竞争，尚未进入构建和发布。补充修复固定为 Xray `yz.6`，5 项会话回归连续 10 轮 Linux 并发检测共 50 次通过，无竞争报告；完整 Node 验收必须使用这个最终依赖重新执行。
 
 ## `yz.20` HY2 前置入口基线（尚未发布）
 

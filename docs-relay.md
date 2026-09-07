@@ -195,7 +195,7 @@ ML-KEM-768 时仍可运行兼容 Xray 的 `xray vlessenc` 后手工填写，Node
 Xray 读取内部出站计数，可能包含协议封装；sing-box 在用户连接的 TCP/UDP 读写事件上，
 按实际选中的出站累计有效载荷。因此两种入口的落地总量统计口径可能不同，不影响用户扣费。
 自定义规则把某条线路改为直连时，sing-box 不把该流量计入原计划的落地。
-Node `v1.13-yz.21` 使用 Xray `v26.7.11-yz.5`，包含 VLESS 首批缓冲上传计数和 UDP 缓存关闭修复；
+Node `v1.13-yz.21` 使用 Xray `v26.7.11-yz.6`，包含 VLESS 首批缓冲上传计数、UDP 缓存及 HY2 会话关闭同步修复；
 sing-box 配套 `v1.14.0-yz.2`，SS2022 原模块的关闭补丁随 Node 固定源码发布。完整验证见 [兼容矩阵](YZ_COMPATIBILITY.md)。
 
 ## 幂等与生命周期

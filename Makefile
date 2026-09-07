@@ -31,7 +31,7 @@ test:
 	go test -mod=readonly -v -race -count=1 -tags "$(BUILD_TAGS)" ./...
 	go test -mod=readonly -v -race -count=1 github.com/anytls/sing-anytls/session
 	go test -mod=readonly -v -race -count=1 github.com/sagernet/sing-shadowsocks/shadowaead_2022
-	go test -mod=readonly -v -race -count=1 -tags "$(BUILD_TAGS)" github.com/xtls/xray-core/common/singbridge github.com/sagernet/sing-box/transport/v2raygrpclite github.com/sagernet/sing-box/third_party/sing-shadowsocks/shadowaead_2022
+	go test -mod=readonly -v -race -count=1 -tags "$(BUILD_TAGS)" github.com/xtls/xray-core/common/singbridge github.com/xtls/xray-core/transport/internet/hysteria github.com/sagernet/sing-box/transport/v2raygrpclite github.com/sagernet/sing-box/third_party/sing-shadowsocks/shadowaead_2022
 
 # Clean build artifacts
 clean:

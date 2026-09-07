@@ -4,11 +4,32 @@
 Node 起点为 `94e2a76e42c1f059126b588b2d02f49e54fd8246`，面板起点为
 `eff2fa22531f2e15168d3e7e96d8ab45639b1969`，包含工作区中已有的 HY2 修改。
 
-当前 Xray 固定为 `v26.7.11-yz.5` / `dcb690846b525851f0ee8dc47388e110d4600042`，sing-box 固定为
+当前 Xray 固定为 `v26.7.11-yz.6` / `b4caa82d6414196565599c19ebc1b53e331349b6`，sing-box 固定为
 `v1.14.0-yz.2` / `09615a105e219076330d9d2a25ea1e2e733d5427`。SS2022 关闭补丁位于 Node 的
 `compat/sing-shadowsocks`，上游基线为 `v0.2.8` / `e0612494bafdd1429e9632bc52fd278585d28690`。
 
-## 三类并发修复验证（2026-09-08）
+## 发布前 HY2 补充修复（2026-09-08）
+
+Node 提交 `9047546147f2028e756a33b3a5fabb8a1a67d778` 的完整 `make test` 在
+[run 34155848942](https://github.com/P0me1oo/YZboard-Node/actions/runs/34155848942) 报告另一类数据竞争：
+`TestHysteria2RelayRuntime/salamander=false` 中，Xray `udpSessionManager.clean` 在锁外读取关闭状态，
+同时 `run` 在锁内写入。流水线在测试阶段失败，未构建或发布安装包、镜像。
+
+同一文件的 `InterConn.Write` 与会话关闭也共享未同步的关闭状态。新增用例在 `yz.5` 上分别复现两处竞争；
+`yz.6` 使用管理器读锁与单会话原子状态修复，关闭不等待正在进行的写入。5 项回归在 Linux/amd64、Go 1.26.4 下
+连续 10 轮 `-race` 共 50 次通过，耗时 31.045 秒，无竞争报告。覆盖清理退出、空闲会话回收、关闭后拒绝新会话、
+并发写入、阻塞写入、读取唤醒、底层错误、缓存排空和重复关闭。
+
+Windows/amd64 的核心 `transport/internet/hysteria`、`common/singbridge` 和 `core` 普通测试通过。
+Windows 并发检测器受工具链及运行时地址分配限制未能有效运行，该补充并发结论来自 Linux。
+本次 Linux 单元测试没有使用网络监听或认证信息；测试结束后独立目录已删除并复查不存在，本次 Netcatty 会话已关闭。
+
+最终 Xray replacement 为 `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260907200713-b4caa82d6414`，
+构建信息和 CI 显式回归包同步更新。最终完整 Node 并发检测、安装包与镜像验证以这个依赖对应的发布 CI 为准。
+
+## 三类并发修复验证（Xray yz.5 阶段，2026-09-08）
+
+本节 Xray 使用 `v26.7.11-yz.5` / `dcb690846b525851f0ee8dc47388e110d4600042`，属于补充 HY2 修复之前的阶段结果。
 
 | 位置 | 修复与保持的行为 |
 | --- | --- |
