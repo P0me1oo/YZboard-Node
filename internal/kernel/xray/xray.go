@@ -398,6 +398,7 @@ func (x *Xray) AddUsers(users []model.UserSpec) (int, error) {
 	// 只有运行时全部更新成功后才推进账面状态，避免后续同步被错误哈希跳过。
 	x.mu.Lock()
 	x.users = merged
+	x.lastKernelHash = kernel.ComputeHash(x.nodeConfig, merged)
 	x.mu.Unlock()
 	x.updateDispatcherLimits(merged)
 	x.updateBandwidthLimits(merged)
@@ -463,6 +464,7 @@ func (x *Xray) RemoveUsers(users []model.UserSpec) (int, error) {
 	// 只有运行时全部更新成功后才推进账面状态，失败时由 Service 完整重建内核。
 	x.mu.Lock()
 	x.users = kept
+	x.lastKernelHash = kernel.ComputeHash(x.nodeConfig, kept)
 	x.mu.Unlock()
 	x.updateDispatcherLimits(kept)
 	x.updateBandwidthLimits(kept)
@@ -523,6 +525,7 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 	// 只有运行时完成删除和添加后才推进账面状态与限速映射。
 	x.mu.Lock()
 	x.users = users
+	x.lastKernelHash = kernel.ComputeHash(x.nodeConfig, users)
 	x.mu.Unlock()
 	x.updateDispatcherLimits(users)
 	x.updateBandwidthLimits(users)

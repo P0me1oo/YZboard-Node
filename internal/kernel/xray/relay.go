@@ -69,11 +69,9 @@ func buildRelayOutbounds(nc *model.NodeSpec) []M {
 	return outbounds
 }
 
-// buildRelayRoutingRules maps VLESS routing numbers to outbounds.
-//
-// The number lives in two bytes of the UUID the client sends; Xray zeroes those
-// bytes before authenticating the user, then exposes the original value to the
-// router as `vlessRoute`. The entry's own number selects the direct outbound.
+// buildRelayRoutingRules 把 VLESS 身份或 HY2 认证 UUID 中的路由编号映射到出站。
+// Xray 清零 UUID 的第 7、8 字节后校验用户，再用原始字节填充 vlessRoute；
+// 入口自身的编号选择直接出站，落地编号选择对应的内部出站。
 func buildRelayRoutingRules(nc *model.NodeSpec) []M {
 	if !nc.IsRelayEntry() {
 		return nil

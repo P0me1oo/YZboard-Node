@@ -94,6 +94,9 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 // startLocked 先构造候选实例，释放旧实例资源后启动；失败直接返回错误。
 // 同端口监听、缓存数据库等资源不能由两个 Box 同时占用。
 func (s *SingBox) startLocked(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
+	if err := s.validateRelay(nodeConfig, users); err != nil {
+		return err
+	}
 	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
@@ -131,7 +134,7 @@ func (s *SingBox) startLocked(nodeConfig *model.NodeSpec, users []model.UserSpec
 		tracker.globalLastUpdate = previous.globalLastUpdate
 		previous.globalMu.RUnlock()
 	}
-	tracker.SetUserMap(buildUserMap(users))
+	tracker.setNodeUsers(nodeConfig, users)
 	if s.speedLimitFunc != nil {
 		tracker.SetSpeedLimitFunc(s.speedLimitFunc)
 	}
@@ -170,6 +173,9 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 	if s.box == nil {
 		return fmt.Errorf("not running")
 	}
+	if err := s.validateRelay(nodeConfig, users); err != nil {
+		return err
+	}
 
 	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
 	data, err := json.Marshal(cfgMap)
@@ -207,7 +213,7 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 	// Trackers remain registered on the Router (which survives ReloadUsers).
 	// Only update the user map — do NOT re-register or traffic is double-counted.
 	if s.connTracker != nil {
-		s.connTracker.SetUserMap(buildUserMap(users))
+		s.connTracker.setNodeUsers(nodeConfig, users)
 	}
 
 	nlog.Core().Debug("sing-box reloaded", "users", len(users))
@@ -340,6 +346,7 @@ func (s *SingBox) AddUsers(users []model.UserSpec) (int, error) {
 	for _, u := range users {
 		if _, dup := existing[u.ID]; !dup {
 			toAdd = append(toAdd, u)
+			existing[u.ID] = struct{}{}
 		}
 	}
 	if len(toAdd) == 0 {
@@ -396,6 +403,9 @@ func (s *SingBox) UpdateUsers(users []model.UserSpec) (added, removed int, err e
 	if s.box == nil {
 		return 0, 0, fmt.Errorf("not running")
 	}
+	if err := validateRelayUsers(s.nodeConfig, users); err != nil {
+		return 0, 0, err
+	}
 
 	toAdd, toRemove := kernel.UserDiff(s.users, users)
 	added, removed = len(toAdd), len(toRemove)
@@ -403,7 +413,7 @@ func (s *SingBox) UpdateUsers(users []model.UserSpec) (added, removed int, err e
 	if added == 0 && removed == 0 {
 		// Only limits may have changed — update tracker map.
 		if s.connTracker != nil {
-			s.connTracker.SetUserMap(buildUserMap(users))
+			s.connTracker.setNodeUsers(s.nodeConfig, users)
 		}
 		s.users = users
 		return 0, 0, nil
@@ -419,6 +429,9 @@ func (s *SingBox) UpdateUsers(users []model.UserSpec) (added, removed int, err e
 // reloadInboundsLocked hot-swaps inbound users using UpdatableInbound.
 // Must be called with s.mu held.
 func (s *SingBox) reloadInboundsLocked(users []model.UserSpec) error {
+	if err := validateRelayUsers(s.nodeConfig, users); err != nil {
+		return err
+	}
 	cfgMap := buildConfig(s.cfg, s.nodeConfig, users, s.tls)
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
@@ -429,7 +442,19 @@ func (s *SingBox) reloadInboundsLocked(users []model.UserSpec) error {
 	if err != nil {
 		return fmt.Errorf("parse options: %w", err)
 	}
+	if s.nodeConfig.IsRelayEntry() {
+		return s.reloadRelayUsersLocked(users, opts)
+	}
+	if err := s.updateInboundUsersLocked(opts); err != nil {
+		return err
+	}
+	if s.connTracker != nil {
+		s.connTracker.setNodeUsers(s.nodeConfig, users)
+	}
+	return nil
+}
 
+func (s *SingBox) updateInboundUsersLocked(opts option.Options) error {
 	im := service.FromContext[adapter.InboundManager](s.ctx)
 	if im == nil {
 		return fmt.Errorf("inbound manager not available")
@@ -490,11 +515,6 @@ func (s *SingBox) reloadInboundsLocked(users []model.UserSpec) error {
 		return fmt.Errorf("inbound %s not available for user updates", tag)
 	}
 
-	if s.connTracker != nil {
-		s.connTracker.SetUserMap(buildUserMap(users))
-	}
-
-	nlog.Core().Debug("sing-box users hot-swapped", "users", len(users))
 	return nil
 }
 

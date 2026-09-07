@@ -168,6 +168,42 @@ func TestValidateNodeSpec_RelayVLESSMatrix(t *testing.T) {
 	}
 }
 
+func TestValidateNodeSpec_Hysteria2Relay(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*panel.NodeConfig)
+		kernel string
+		want   string
+	}{
+		{"HY2", func(*panel.NodeConfig) {}, "xray", ""},
+		{"HY1", func(n *panel.NodeConfig) { n.Version = 1 }, "xray", "version 2"},
+		{"sing-box", func(*panel.NodeConfig) {}, "singbox", ""},
+		{"未知混淆", func(n *panel.NodeConfig) { n.Obfs = "unknown" }, "xray", "obfuscation"},
+		{"缺少混淆密码", func(n *panel.NodeConfig) { n.Obfs = "salamander" }, "xray", "password"},
+		{"ECH", func(n *panel.NodeConfig) {
+			n.TLSSettings = map[string]any{"ech": map[string]any{"enabled": true}}
+		}, "xray", "ECH"},
+		{"混淆", func(n *panel.NodeConfig) {
+			n.Obfs, n.ObfsPassword = "salamander", strings.Repeat("test", 4)
+		}, "xray", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nc := entrySpec()
+			nc.Protocol, nc.Version = "hysteria", 2
+			nc.Relay.Children = append(nc.Relay.Children, vlessRelayChild("tcp", 0))
+			tc.mutate(nc)
+			_, err := NodeSpecFromPanelValidated(nc, config.KernelConfig{Type: tc.kernel})
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("合法 HY2 中转配置被拒绝: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("校验错误 = %v，应包含 %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateNodeSpec_RelayRejected(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -176,15 +212,15 @@ func TestValidateNodeSpec_RelayRejected(t *testing.T) {
 		want   string
 	}{
 		{
-			name:   "entry on singbox",
-			mutate: func(*panel.NodeConfig) {},
+			name:   "unsupported singbox transport",
+			mutate: func(n *panel.NodeConfig) { n.Network = "mkcp" },
 			kernel: config.KernelConfig{Type: "singbox"},
-			want:   "requires the xray kernel",
+			want:   "does not support vless transport",
 		},
 		{
-			name:   "entry not vless",
+			name:   "unsupported entry protocol",
 			mutate: func(nc *panel.NodeConfig) { nc.Protocol = "trojan" },
-			want:   "requires a vless inbound",
+			want:   "requires a vless or hysteria2 inbound",
 		},
 		{
 			name: "entry reality over websocket",

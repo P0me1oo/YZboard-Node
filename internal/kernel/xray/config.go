@@ -484,6 +484,7 @@ func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel
 		},
 	}
 
+	finalMask := M{}
 	if nc.UpMbps > 0 || nc.DownMbps > 0 {
 		quicParams := M{}
 		if nc.UpMbps > 0 {
@@ -492,9 +493,17 @@ func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel
 		if nc.DownMbps > 0 {
 			quicParams["brutalDown"] = fmt.Sprintf("%d mbps", nc.DownMbps)
 		}
-		ss["finalMask"] = M{
-			"quicParams": quicParams,
-		}
+		finalMask["quicParams"] = quicParams
+	}
+	if nc.Obfs == "salamander" {
+		// 与客户端订阅使用同一份混淆参数，不能只把它下发给客户端。
+		finalMask["udp"] = []M{{
+			"type":     "salamander",
+			"settings": M{"password": nc.ObfsPassword},
+		}}
+	}
+	if len(finalMask) > 0 {
+		ss["finalMask"] = finalMask
 	}
 
 	if tc.HasCert() {

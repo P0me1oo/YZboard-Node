@@ -11,10 +11,10 @@ Node backend for [YZboard](https://github.com/P0me1oo/YZboard). Supports `sing-b
 - User controls: speed limit, device limit, alive-IP tracking, hot update
 - Deploy modes: node mode, machine mode, standalone mode
 - Multi-instance: single process binding multiple panels / nodes
-- Relay: VLESS entry with Shadowsocks or VLESS landings, including VLESS Encryption
+- 中转：Xray、sing-box 均可作为 VLESS/Hysteria2 入口或 Shadowsocks/VLESS 落地，两种内核可以混用；VLESS Encryption 仅用于两端都是 Xray 的链路
 - Machine mode: each panel node can select Xray or sing-box independently; Xray is the default
 - 时间校准：为依赖时间戳的 Shadowsocks 2022 链路提供进程内 NTP 校准
-- sing-box：`yz.17` 以官方 `v1.14.0` 为基线，固定使用 `P0me1oo/YZ-sing-box v1.14.0-yz.1`，保留用户和路由热更新、Mieru；发布状态见 [兼容矩阵](YZ_COMPATIBILITY.md)，运行和安装验收方法见 [升级验证](docs/singbox-v1.14-validation.md)
+- sing-box：以官方 `v1.14.0` 为基线，`yz.21` 配套 `P0me1oo/YZ-sing-box v1.14.0-yz.2`，保留用户和路由热更新、Mieru，并修复中转检测发现的 gRPC 与 SS2022 关闭竞争；固定依赖和验证记录见 [兼容矩阵](YZ_COMPATIBILITY.md)
 - 可靠性：`yz.19` 让配置、重载和用户应用失败直接进入停止/失败状态，不自动恢复旧配置；同时保留空用户同步、内核重载和退出流量结算修复，验证范围与 Linux 测试方法见 [修复验证](docs/node-reliability-validation.md)
 - 故障隔离：单个节点端口冲突或配置错误只停止自身，其他节点继续服务；整体 `/healthz` 返回 503 表示至少有一项失败，不代表所有节点停止。
 
@@ -93,7 +93,7 @@ Legacy single-panel config is fully compatible. Appending bindings auto-migrates
 ## Extensions
 
 - Xray REALITY 最低客户端版本: [docs-xray-reality.md](docs-xray-reality.md)
-- 中转节点与 VLESS 落地: [docs-relay.md](docs-relay.md)
+- VLESS/HY2 前置入口与中转落地：[docs-relay.md](docs-relay.md)
 - Custom routes: [docs-custom-routes.md](docs-custom-routes.md)
 - Custom outbounds: [docs-custom-outbounds.md](docs-custom-outbounds.md)
 - DNS providers (ACME DNS-01): [docs-dns-providers.md](docs-dns-providers.md)

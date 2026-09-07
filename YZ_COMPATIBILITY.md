@@ -2,42 +2,45 @@
 
 本文件记录可发布的 Node 构建与内嵌内核之间的固定关系。构建上线时必须使用明确的 Node Release Tag 和固定的 Xray fork commit，不能依赖 `main` 或其他移动分支。
 
-## 当前源码与已发布构建
+## 本版发布引用与回滚基线
 
 | 项目 | 标识 |
 | --- | --- |
-| Node 源码目标版本 | `v1.13-yz.19` |
-| Node 发布版本 | `v1.13-yz.19` |
+| Node 本版版本 | `v1.13-yz.21`；固定来源使用同名 Git Tag |
+| 上一正式 Node 版本（回滚） | `v1.13-yz.19` |
 | Node 适用分支 | `upgrade/singbox-v1.14.0` |
 | Node 上游发布基线 | `v1.13` |
 | Node 上游基线 commit | `0a29338e1f102a462363ce3527417029f89bab28` |
-| Node Release Tag 对应 commit | `v1.13-yz.19` / `d22037477a7e97825990eb35e41d12926c117680` |
+| Node 本版 Release | [v1.13-yz.21](https://github.com/P0me1oo/YZboard-Node/releases/tag/v1.13-yz.21)；完整来源、架构和校验值由附件中的构建信息与 SHA256SUMS 固定 |
+| Node 回滚 Tag / commit | `v1.13-yz.19` / `d22037477a7e97825990eb35e41d12926c117680` |
 | Node `yz.19` 修复基线 | `89c2753390356f51df3d8fc133ae8064fa8ed669` |
 | Node `yz.17` 验证构建 commit | `ada7bb60b18bf14b80e171030b82bc0f3412beb6` |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
-| Node Release 构建 | Node、xbctl 的 `linux/amd64` 与 `linux/arm64` 安装包、安装器、四份构建元数据和 SHA256SUMS 共 10 个附件已发布 |
-| Node Docker 标签 | `ghcr.io/p0me1oo/yzboard-node:v1.13-yz.19` 与 `latest` 指向同一已验证镜像 |
-| Node Docker manifest（yz.19） | OCI index `sha256:8b65c52c0c0f59a24c56ab48ced7a1dda9a07c6948edc3f454b41c140d999818`；包含 `linux/amd64` 与 `linux/arm64` |
+| Node Release 构建 | Node、xbctl 的 `linux/amd64` 与 `linux/arm64` 安装包、安装器、四份构建元数据和 SHA256SUMS，共 10 个附件 |
+| Node 本版 Docker 标签 | `ghcr.io/p0me1oo/yzboard-node:v1.13-yz.21`；发布流水线验证后同步 `latest` |
+| Node 回滚 Docker manifest（yz.19） | OCI index `sha256:8b65c52c0c0f59a24c56ab48ced7a1dda9a07c6948edc3f454b41c140d999818`；包含 `linux/amd64` 与 `linux/arm64` |
 | 上一正式 Docker manifest（yz.16） | OCI index `sha256:f3e0895ebc04ac603158a5b96413e7695e5c7a1abd596ee864d7d4852b0b4665`；用于回滚版本审计 |
-| Node Docker OCI 标识 | `revision=d22037477a7e97825990eb35e41d12926c117680`；`version=v1.13-yz.19` |
-| YZboard 兼容版本 | `1.9.0`（待发布；用户-落地流量归属需与 Node `v1.13-yz.16` 成套使用） |
-| 最近已发布 YZboard 兼容代码 | `cf698392cd0b0623876b5166ab31b10fea2cb889`（面板 `v1.4.0`） |
+| Node 本版 Docker OCI 标识 | `revision` 必须等于 `v1.13-yz.21` Tag 的完整提交，`version=v1.13-yz.21` |
+| YZboard 兼容版本 | `1.11.0`；sing-box 中转需与 Node `v1.13-yz.21` 成套使用 |
+| 上一正式 YZboard 兼容代码 | `eff2fa22531f2e15168d3e7e96d8ab45639b1969`（面板 `v1.9.0`） |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
 | Xray 上游 Tag commit | `50231eaff98ccc31b5cbd247a721c16e97fe5ec1` |
-| YZ-Xray-core 源码目标版本 | `v26.7.11-yz.3`（待发布） |
-| YZ-Xray-core 当前已固定版本 / commit | `v26.7.11-yz.3` / `601226e180d3684a5eabb8bc901c99f499398db1` |
-| Node 当前 Xray replace | `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260903142229-601226e180d3` |
-| YZboard 兼容标识 | `xray-v26.7.11-yz.3`（面板版本 `1.9.0`） |
+| YZ-Xray-core 源码 Tag | `v26.7.11-yz.5` |
+| YZ-Xray-core 当前已固定版本 / commit | `v26.7.11-yz.5` / `dcb690846b525851f0ee8dc47388e110d4600042` |
+| Node 当前 Xray replace | `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260907183145-dcb690846b52` |
+| YZboard 兼容标识 | `xray-v26.7.11-yz.5`（面板 `1.11.0`） |
 | sing-box `require` 版本 | `v1.14.0` |
-| sing-box 实际 replacement | `github.com/P0me1oo/YZ-sing-box v1.14.0-yz.1` |
+| sing-box 实际 replacement | `github.com/P0me1oo/YZ-sing-box v1.14.0-yz.2` |
 | sing-box 官方基线 | `v1.14.0` / `0b8995879f29a9b98ee027bc17b75e101445b238` |
 | sing-box 兼容仓库 | [P0me1oo/YZ-sing-box](https://github.com/P0me1oo/YZ-sing-box)；保留用户、路由热更新和 Mieru |
-| sing-box 兼容 Tag / commit | `v1.14.0-yz.1` / `f47d4d565a4371cf46b6c462612fc085f634a6af` |
-| sing-box 模块校验值 | `h1:oyWPL6yHrnYmtLhvM54ygF0fuRbIxIKf5K42rPafUeU=` |
+| sing-box 兼容 Tag / commit | `v1.14.0-yz.2` / `09615a105e219076330d9d2a25ea1e2e733d5427` |
+| sing-box 模块校验值 | `h1:KL0agFYXpL1qEUsa+toI8VhlUVuQser2AVYL3unVkKk=` |
 | sing-box 验证依赖 | 正式 `go.mod` 使用远程固定 Tag；前期隔离实测使用同一兼容源码的本地 replacement |
 | AnyTLS 上游基线 | `anytls/sing-anytls v0.0.11` / `130d2e61b8895727bfed4942c535e91b246a9603` |
 | AnyTLS 实际 replacement | `./compat/sing-anytls`，随 Node 固定提交构建；仅修复流关闭状态和回调的并发访问，来源与移除条件见 [补丁说明](compat/sing-anytls/README.yz.md) |
+| SS2022 原模块基线 | `sing-shadowsocks v0.2.8` / `e0612494bafdd1429e9632bc52fd278585d28690` |
+| SS2022 实际 replacement | `./compat/sing-shadowsocks`，关闭补丁随 Node 固定提交构建，来源与移除条件见 [补丁说明](compat/sing-shadowsocks/README.yz.md) |
 
 Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1.13` 版本线；`yz.5` 支持首版 Shadowsocks 中转，`yz.6` 至 `yz.9` 延续既有安装、出站和用户同步修订，`yz.10` 新增 VLESS 落地、VLESS Encryption 和当前 Xray 传输矩阵，`yz.11` 为安装器与 `xbctl` 增加 Alpine Linux/OpenRC 生命周期支持，`yz.12` 修复机器模式首个用户同步与失败回滚，`yz.13` 增加 REST/WS 双通道对账、ETag 事务回滚和权威设备快照，`yz.14` 增加 SS2022 进程内时间校准、健康状态和主动诊断，`yz.15` 增加机器模式节点级内核选择，`yz.16` 增加用户-落地节点流量归属上报，`yz.19` 明确失败配置停止和健康失败状态，不自动恢复旧配置。Xray 的上游版本、YZ fork patch 版本和 Node 发布版本分别记录，便于升级、回滚和定位构建来源。
 
@@ -45,7 +48,60 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 
 `yz.17` 将 sing-box 官方基线更新为 `v1.14.0`，修复 UDP 统计、用户更新并发、稳定认证身份、路由更新回滚和 Mieru 监听生命周期。兼容源码与 Node 的 Xray 依赖独立；本次没有修改 YZboard 或 YZ-Xray-core。
 
-正式 `go.mod` 与 `go.sum` 已固定两个主内核的远程版本和校验值；AnyTLS 兼容源码随 Node 提交固定。Node `v1.13-yz.19` 已发布，服务器安装版本由用户执行升级后改变。
+正式 `go.mod` 与 `go.sum` 固定两个主内核的远程版本和校验值；AnyTLS 与 SS2022 兼容源码随 Node 提交固定。服务器安装版本由用户执行升级后改变。
+
+## `yz.21` sing-box 中转与并发修复
+
+本轮在上述源码起点的未提交 HY2 实现上继续开发，配套面板为 `1.11.0`。sing-box 支持
+VLESS/HY2 入口和 Shadowsocks/VLESS 落地，可与 Xray 混用。
+2026-09-08 固定 Xray `v26.7.11-yz.5` 和 sing-box `v1.14.0-yz.2`，更新 `go.mod`、`go.sum` 和构建标识。
+用户身份按「用户 × 线路」展开，以原生 `auth_user` 规则选路，再映射回真实用户进行限速、设备限制和计费。
+
+认证、用户映射和路由更新按过渡规则协调；删除或轮换用户后，旧 HY2 会话的新请求不能退回默认出站。
+未知线路不通过认证。用户和线路计数在内核重建、停止恢复时继续累计，落地不加载面板用户。
+sing-box 的线路总量按实际出站上的用户有效载荷计算，Xray 保持原有内部出站口径。
+
+任一端使用 sing-box 时，VLESS 内部链路支持 RAW/TCP、WebSocket、gRPC、HTTPUpgrade，
+不支持 VLESS Encryption、TCP 头部伪装及无效 Vision 组合。使用步骤见 [中转说明](docs-relay.md)，
+本轮运行、两机测试、性能测量和构建记录见 [sing-box 中转验证](docs/singbox-relay-validation.md)。
+
+Xray `yz.5` 保留 VLESS 首批缓冲上传计数修复，并同步 UDP 缓存读取与关闭。sing-box `yz.2` 同步 gRPC 初始化与关闭，修复 SS2022 多用户兼容副本的关闭逻辑；原 SS2022 模块的同一修复随 Node 源码固定。用户套餐和用户-线路明细继续使用原有计数路径。
+
+修复前，新增用例复现三类数据竞争。修复后四个相关包各连续 10 轮 `-race` 通过，共 180 项测试及子测试执行。Windows/amd64 的 Node 完整普通测试通过：17 个有测试的包、609 项测试及子测试，无失败或测试跳过；面板 57 项测试、549 个断言通过。
+
+Linux/amd64 完整 sing-box 包并发检测耗时 126.042 秒，142 项测试及子测试全部通过，无跳过、无竞争报告；此前失败的混合内核与 gRPC 分支全部保留。YT-HK、DGN-HK 使用修复后依赖完成 60 次转发及生命周期请求，覆盖 TCP/UDP、用户增删、重复同步、重载和停止恢复。原 Xray `yz.4` 下的失败结果保留在验证文档的历史部分。
+
+上述本地及双机测试使用待发布工作区。正式 Node 安装包和镜像由发布 CI 检出固定提交构建，并核对实际模块、目标架构、来源提交和 `vcs.modified=false`。升级时先更新相关 Node，再更新面板并启用新拓扑；上一正式版本用于回滚。
+
+## `yz.20` HY2 前置入口基线（尚未发布）
+
+本次修改起点为 Node `94e2a76e42c1f059126b588b2d02f49e54fd8246`，配套面板起点为
+`eff2fa22531f2e15168d3e7e96d8ab45639b1969`。源码目标为 Node `v1.13-yz.20` 与面板 `1.10.0`，
+提交、Tag、Release 和新镜像均需在正式发布时另行固定。
+
+HY2 前置入口复用 YZ-Xray-core `601226e180d3684a5eabb8bc901c99f499398db1` 的认证 UUID 路由能力，
+入口和落地均使用 Xray，内部协议仍为 Shadowsocks/VLESS。该轮固定依赖未变，联调发现 VLESS 出站上传漏计；后续修复与依赖接入见上文 `yz.21` 记录。
+同时修正用户热更新成功后未更新配置指纹的问题，避免随后相同配置同步误触发重建、中断 HY2 会话。
+
+`relay` 配置和三类流量报告的结构不变。应先升级 Node，再启用面板中的 HY2 前置入口。
+使用方式、证书和混淆要求见 [中转说明](docs-relay.md)。
+
+### 本地验证状态（2026-09-07，Xray yz.3 历史结果）
+
+当时固定核心下，`TestHysteria2RelayRuntime` 的实际 TCP/UDP 路由、Salamander、用户变更、重载、恢复及用户流量断言通过，
+但最终 VLESS 落地出站上传计数为零，运行测试因此失败。
+根因是 Xray `BufferToBytesWriter` 的普通字节写入绕过计数器，导致 VLESS 首批缓冲写入漏计；用户套餐和用户-落地明细的计数路径不受此问题影响。
+
+用本地临时覆盖补上字节写入计数后，Node 完整 Go 测试及核心 `common/buf` 测试通过。
+独立的核心回归用例还覆盖缓冲刷新、部分写入及失败时的实际字节计数，确认多缓冲区写入不会重复累计。
+临时覆盖未修改核心仓库和正式依赖，不能作为正式发布验收；需在修复纳入、固定到远程不可变提交后重新验证。
+
+安装器服务文件测试和 AnyTLS 兼容模块测试通过。Windows 环境下 `go test -race` 因未启用 CGO 无法执行；完整 race 检查仍需具备 C 编译器的环境。
+
+使用正式 `go.mod`、关闭临时工作区及覆盖后，`xboard-node` 和 `xbctl` 的 `linux/amd64`、`linux/arm64` 交叉编译通过。
+产物已核对目标架构、`CGO_ENABLED=0`、Xray/sing-box 实际 replacement 和 VCS 信息：
+`vcs.revision=94e2a76e42c1f059126b588b2d02f49e54fd8246`、`vcs.modified=true`。
+这些产物来自未提交工作区，仅用于编译验证，包含的 Xray 仍是上述未修复统计问题的固定依赖；未执行 Linux 运行验收，也未作为 Release 发布。
 
 ## `yz.19` 正式发布（2026-09-07）
 
@@ -81,9 +137,9 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 
 ## `yz.18` 可靠性修复（2026-09-06）
 
-本次只修改 Node，沿用上表中的 sing-box、Xray 固定依赖和既有面板接口。修复范围包括内核监听退役、出站应用与失败恢复、空用户同步、REST 用户重试、跨实例流量累计和退出上报。详细不变量、执行命令和验证状态见 [修复验证](docs/node-reliability-validation.md)。
+该轮只修改 Node，沿用当时固定的 sing-box、Xray 依赖和既有面板接口。修复范围包括内核监听退役、出站应用与失败恢复、空用户同步、REST 用户重试、跨实例流量累计和退出上报。详细不变量、执行命令和验证状态见 [修复验证](docs/node-reliability-validation.md)。
 
-`yz.18` 构建来自上表基线的未提交修复，必须保留实际的 `vcs.modified=true` 标识。发布前需要提交、固定 Tag、重新构建并更新本表；下文 `yz.17` 的历史校验值不能用于本次修复产物。
+`yz.18` 开发构建来自当时未提交的修复，保留实际的 `vcs.modified=true` 标识。该轮正式发布前需要提交、固定 Tag、重新构建并更新记录；下文 `yz.17` 的历史校验值不能用于 `yz.18` 修复产物。
 
 Windows amd64 全量测试通过：17 个包、555 项测试及子测试；`go vet` 与安装器脚本检查通过。YT-HK 上实际执行四个 Linux amd64 `-race` 测试包，共 301 项测试及子测试，全部通过、无跳过、无数据竞争。Node、xbctl 双架构构建和 amd64 运行时版本检查通过；arm64 尚未进行实机运行。测试产物和结果按 [修复验证](docs/node-reliability-validation.md) 归档，本次远程测试文件已清理。
 
@@ -107,7 +163,7 @@ Windows amd64 全量测试通过：17 个包、555 项测试及子测试；`go v
 
 ## `yz.17` 开发验证（2026-09-05）
 
-本次结果对应 `v1.13-yz.17-test`。Node 使用升级分支的未提交改动及上表中的本地兼容核心；不代表 `v1.13-yz.17` 已发布。测试方法和未覆盖的场景见 [sing-box 升级验证](docs/singbox-v1.14-validation.md)。
+该轮结果对应 `v1.13-yz.17-test`。Node 使用升级分支的未提交改动及当时的本地兼容核心；这些开发结果不代表正式发布。测试方法和未覆盖的场景见 [sing-box 升级验证](docs/singbox-v1.14-validation.md)。
 
 | 检查 | 结果 |
 | --- | --- |
@@ -136,7 +192,7 @@ Windows amd64 全量测试通过：17 个包、555 项测试及子测试；`go v
 
 ## 兼容约束
 
-- Hysteria2 用户转换使用 Xray v26.7.11 的 `hysteria/account.MemoryAccount{Auth: ...}`，同时保留 `MemoryUser.Email` 的 `user@<id>` 映射。
+- Xray 的 Hysteria2 用户转换使用 v26.7.11 的 `hysteria/account.MemoryAccount{Auth: ...}`，同时保留 `MemoryUser.Email` 的 `user@<id>` 映射。
 - Xray fork 提供的 Dispatcher、用户级限速、统计计数器和在线 IP/连接状态能力继续由 Node 使用。
 - Node 的流量方向保持 `[upload, download]`，由内核累计计数器交给 tracker 计算增量，再由面板客户端上报。
 - 中转入口的 `relay_user_traffic` 形状为 `user_id => logical_node_id => [upload, download]`，只用于用户-落地归属分析，不参与套餐扣除；`relay_traffic` 继续负责落地节点总量。
@@ -144,7 +200,7 @@ Windows amd64 全量测试通过：17 个包、555 项测试及子测试；`go v
 - Xray REALITY 入站的 `realitySettings.minClientVer` 由 Node 显式写入，默认 `0.0.0`，可通过 `kernel.reality_min_client_ver` 覆盖。缺省该字段时 v26.7.11 会使用内置下限 `26.3.27`，低于该版本的客户端握手会被拒绝。
 - v26.7.11 已移除未加密 Shadowsocks。历史配置中的 `none`/`plain` 会显式返回错误，不会静默转换成其他加密算法。
 - `go.mod` 的 Xray `require` 版本只用于保持模块路径兼容；实际代码由 `replace` 固定到上表中的 fork pseudo-version。提交前应使用 `go list -m -json github.com/xtls/xray-core` 复核替换路径和版本。
-- 中转拓扑依赖 Xray 的 VLESS 路由值能力：认证前清零 UUID 第 7、8 字节，认证后按原始字节还原，并由路由规则的 `vlessRoute` 匹配。该能力来自上游 `v26.7.11`，sing-box 不具备，因此入口和落地节点都要求 xray 内核。
+- Xray 中转通过携带线路编号的认证身份和 `vlessRoute` 规则选路；sing-box 中转按用户与线路生成认证身份，并使用原生 `auth_user` 规则。Node `yz.21` 起入口与落地可混用两种内核，内部传输按两端共同能力校验。
 - 面板 `relay` 段与 `relay_traffic` 上报字段属于 YZboard `1.1.0` 起的接口；旧面板不下发该字段时 Node 行为不变。
 - 安装器从 `yz.6` 起默认写入 `kernel.type: xray`；`yz.15` 起代码层缺省也按 Xray 处理空值。机器模式下节点的面板 `kernel_type` 优先于机器级默认值；独立实例仍可显式执行 `xbctl config kernel <xray|singbox>` 切换。
 - xray 可承载的入站协议为 vmess、vless、trojan、shadowsocks、hysteria；tuic、naive、anytls、mieru、socks、http 只能由 sing-box 承载。安装器和 `xbctl config kernel` 都会在未显式确认时拒绝把这些节点切到 xray。
@@ -152,8 +208,8 @@ Windows amd64 全量测试通过：17 个包、555 项测试及子测试；`go v
 - 从 `yz.8` 起，同一用户 ID 的 UUID 变化会被视为凭据替换，Xray `UserManager` 必须先删除旧凭据再添加新凭据；任一步失败都不得推进 Node 内部用户状态，并由 Service 尝试使用完整用户集重建内核。
 - 从 `yz.9` 起，Xray 的 Shadowsocks 2022 动态用户密钥按面板约定从 UUID 前 16 或 32 字节生成标准 Base64；静态启动配置和运行时增删用户必须得到同一密钥。
 - 从 `yz.10` 起，中转 child/landing 同时接受 Shadowsocks 和 VLESS。VLESS 的入口客户端参数放在 `relay.children[].vless`，落地内部身份放在 `relay.vless`；服务端顶层继续承载 `decryption`、Reality 私钥和证书配置。
-- VLESS relay 的传输矩阵固定为 RAW/TCP、WS、gRPC、XHTTP、HTTPUpgrade、mKCP、Hysteria；Reality 只允许 RAW/TCP、gRPC、XHTTP，Hysteria 必须使用 TLS，H2/HTTP 和 mKCP header/seed 会在启动前拒绝。
-- `yz.10` 继续使用当前 `go.mod` 固定的 YZ-Xray-core pseudo-version，不需要核心补丁。入口和落地 JSON 由该核心自带解析器覆盖验证。
+- 两端均为 Xray 时，VLESS relay 支持 RAW/TCP、WS、gRPC、XHTTP、HTTPUpgrade、mKCP、Hysteria；Reality 只允许 RAW/TCP、gRPC、XHTTP，Hysteria 必须使用 TLS，H2/HTTP 和 mKCP header/seed 会在启动前拒绝。任一端使用 sing-box 时，内部传输限于 RAW/TCP、WS、gRPC、HTTPUpgrade，并按传输校验安全组合。
+- `yz.10` 当时沿用已固定的 YZ-Xray-core pseudo-version，本项协议扩展未新增核心补丁。入口和落地 JSON 由该核心自带解析器覆盖验证。
 - `yz.11` 的安装器自动识别正在运行的 systemd 或 OpenRC。OpenRC 路径固定使用 `/etc/init.d/xboard-node`、`supervise-daemon` 和 `default` runlevel，日志写入 `/var/log/xboard-node.log`；凭据仍保存在权限为 `0600` 的 `/etc/xboard-node/credentials.env`，启动脚本只按 `KEY=VALUE` 解析，不执行其中内容。
 - `yz.14` 的 SS2022 时间校准只在 Node 进程内提供可选时间函数，不修改系统时间。Xray 需要 `v26.7.11-yz.2` 的上下文时间服务补丁；sing-box 使用相同服务，避免每个实例重复查询 NTP。
 - `yz.15` 的机器模式按节点创建独立内核服务；只有发现到 sing-box 节点时才创建 sing-box 服务。节点内核变化只重启目标节点，Xray-only 机器不会启动空的 sing-box。
@@ -163,7 +219,7 @@ Windows amd64 全量测试通过：17 个包、555 项测试及子测试；`go v
 - 普通 SS2022 入站、VLESS 前置中的 SS2022 出站和落地 SS2022 入站共享同一校准结果。VLESS 客户端入口本身不依赖该时间戳。
 - 校准器默认并行查询三个 NTP 源并使用有效偏移中位数；查询失败不会猜测时间，最近成功结果超过三个查询周期后回退系统时间。
 - `/healthz` 的时钟降级保持 HTTP 200；只有节点组件启动中或失败继续返回 HTTP 503。`xbctl doctor time` 的异常状态返回非零退出码。
-- 当前 `go.mod` 已固定 YZ-Xray-core `v0.0.0-20260903142229-601226e180d3`，对应 fork `v26.7.11-yz.3` 和 commit `601226e180d3684a5eabb8bc901c99f499398db1`。正式构建前仍需确认该核心提交可回滚，并不得改回本地路径 replace 或移动分支。
+- 当前 `go.mod` 已固定 YZ-Xray-core `v0.0.0-20260907151131-4c8f533bce32`，对应 fork `v26.7.11-yz.4` 和 commit `4c8f533bce3258e1c03469d5a6013152988aac04`。正式构建前仍需确认该核心提交可回滚，并不得改回本地路径 replace 或移动分支。
 
 ## `yz.13` 同步兼容约束
 

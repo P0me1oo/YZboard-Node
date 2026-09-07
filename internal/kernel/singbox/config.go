@@ -44,6 +44,7 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	if !tags["block"] {
 		outbounds = append(outbounds, M{"type": "block", "tag": "block"})
 	}
+	outbounds = append(outbounds, buildRelayOutbounds(nc)...)
 
 	cfg := M{
 		"log": M{
@@ -53,13 +54,24 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 		"outbounds": outbounds,
 	}
 
-	inbound := buildInbound(nc, users, tc)
+	inboundNode := nc
+	if nc.IsRelayEntry() && nc.Protocol == "vless" {
+		copyNode := *nc
+		copyNode.Network, _ = model.NormalizeRelayVLESSNetwork(nc.Network)
+		inboundNode = &copyNode
+	}
+	inbound := buildInbound(inboundNode, users, tc)
+	if nc.IsRelayLanding() {
+		inbound = buildRelayLandingInbound(nc, tc)
+	} else {
+		configureRelayUsers(inbound, nc, users)
+	}
 	if inbound != nil {
 		cfg["inbounds"] = []M{inbound}
 	}
 
 	// Merge panel routes and static config routes
-	cfg["route"] = buildRoutes(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute))
+	cfg["route"] = buildRoutes(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute), buildRelayRoutingRules(nc, users)...)
 
 	// Automatically enable rule_set caching (cache_file) when panel routes
 	// reference geoip:/geosite: entries so that the downloaded .srs rule_set
@@ -153,7 +165,7 @@ func mergeRouteList(a, b []map[string]any) []map[string]any {
 	return res
 }
 
-func buildRoutes(panelRoutes []model.RouteRule, customRules []model.CustomRouteRule, custom []map[string]any) M {
+func buildRoutes(panelRoutes []model.RouteRule, customRules []model.CustomRouteRule, custom []map[string]any, relayRules ...M) M {
 	var rules []M
 
 	// Structured custom routes now take the highest priority for panel-managed overrides.
@@ -194,6 +206,8 @@ func buildRoutes(panelRoutes []model.RouteRule, customRules []model.CustomRouteR
 		},
 	)
 
+	// 中转选路优先于面板路由组，显式自定义规则保持原有优先级。
+	rules = append(rules, relayRules...)
 	for _, pr := range panelRoutes {
 		rules = append(rules, compilePanelRouteRule(pr)...)
 	}

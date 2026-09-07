@@ -12,16 +12,16 @@ func TestReleaseMetadataIsPinned(t *testing.T) {
 	if XrayUpstreamCommit != "50231eaff98ccc31b5cbd247a721c16e97fe5ec1" {
 		t.Fatalf("XrayUpstreamCommit = %q", XrayUpstreamCommit)
 	}
-	if XrayForkVersion != "v26.7.11-yz.3" {
+	if XrayForkVersion != "v26.7.11-yz.5" {
 		t.Fatalf("XrayForkVersion = %q", XrayForkVersion)
 	}
-	if XrayForkCommit != "601226e180d3684a5eabb8bc901c99f499398db1" {
+	if XrayForkCommit != "dcb690846b525851f0ee8dc47388e110d4600042" {
 		t.Fatalf("XrayForkCommit = %q", XrayForkCommit)
 	}
 	if SingBoxRequestedVersion != "v1.14.0" {
 		t.Fatalf("SingBoxRequestedVersion = %q", SingBoxRequestedVersion)
 	}
-	if SingBoxResolvedVersion != "v1.14.0-yz.1" {
+	if SingBoxResolvedVersion != "v1.14.0-yz.2" {
 		t.Fatalf("SingBoxResolvedVersion = %q", SingBoxResolvedVersion)
 	}
 }
@@ -36,6 +36,9 @@ func TestReportContainsForkAndDependencyIdentity(t *testing.T) {
 		SingBoxRequestedVersion,
 		SingBoxResolvedVersion,
 		SingBoxUpstreamCommit,
+		SingBoxForkCommit,
+		ShadowsocksUpstreamVersion,
+		ShadowsocksUpstreamCommit,
 		AnyTLSUpstreamVersion,
 		AnyTLSUpstreamCommit,
 	} {

@@ -31,10 +31,7 @@ func IsRelaySS2022Cipher(cipher string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(cipher)), "2022-blake3-")
 }
 
-// validateRelay checks the transit topology.
-//
-// The routing number lives in two bytes of the VLESS UUID and is matched by the
-// Xray `vlessRoute` rule field, so an entry node cannot run on sing-box.
+// validateRelay 校验中转拓扑，并按入口或落地实际使用的内核检查协议能力。
 func validateRelay(n *NodeSpec, kernelType string, availableTags map[string]struct{}) error {
 	if n == nil || n.Relay == nil {
 		return nil
@@ -53,14 +50,34 @@ func validateRelay(n *NodeSpec, kernelType string, availableTags map[string]stru
 }
 
 func validateRelayEntry(n *NodeSpec, kernelType string, availableTags map[string]struct{}) error {
-	if kernelType != "xray" {
-		return fmt.Errorf("relay entry requires the xray kernel; vlessRoute routing is not available on %s", kernelType)
+	if kernelType != "xray" && kernelType != "singbox" {
+		return fmt.Errorf("unsupported relay entry kernel %s", kernelType)
 	}
-	if !strings.EqualFold(n.Protocol, "vless") {
-		return fmt.Errorf("relay entry requires a vless inbound, got %q", n.Protocol)
-	}
-	if err := validateRelayEntryVLESS(n); err != nil {
-		return err
+	switch strings.ToLower(strings.TrimSpace(n.Protocol)) {
+	case "vless":
+		if err := validateRelayEntryVLESS(n); err != nil {
+			return err
+		}
+		if kernelType == "singbox" {
+			if err := validateSingBoxRelayVLESS(n.Network, n.Flow, n.Decryption, n.TLS, n.NetworkSettings); err != nil {
+				return err
+			}
+		}
+	case "hysteria":
+		if n.Version != 2 {
+			return fmt.Errorf("relay entry requires hysteria version 2, got %d", n.Version)
+		}
+		if n.Obfs != "" && n.Obfs != "salamander" {
+			return fmt.Errorf("relay entry: unsupported hysteria2 obfuscation %q", n.Obfs)
+		}
+		if n.Obfs == "salamander" && len(n.ObfsPassword) < 4 {
+			return fmt.Errorf("relay entry: salamander password must contain at least 4 bytes")
+		}
+		if ech, ok := n.TLSSettings["ech"].(map[string]any); ok && ech["enabled"] == true {
+			return fmt.Errorf("relay entry: hysteria2 ECH is not supported")
+		}
+	default:
+		return fmt.Errorf("relay entry requires a vless or hysteria2 inbound, got %q", n.Protocol)
 	}
 	if err := validateRouteID(n.Relay.RouteID, "relay entry route_id"); err != nil {
 		return err
@@ -117,6 +134,12 @@ func validateRelayEntry(n *NodeSpec, kernelType string, availableTags map[string
 			if err := validateRelayVLESS(child.VLESS, fmt.Sprintf("relay child %d", child.NodeID)); err != nil {
 				return err
 			}
+			if kernelType == "singbox" {
+				v := child.VLESS
+				if err := validateSingBoxRelayVLESS(v.Network, v.Flow, v.Encryption, v.TLS, v.NetworkSettings); err != nil {
+					return err
+				}
+			}
 		default:
 			return fmt.Errorf("relay child %d: unsupported transit protocol %q", child.NodeID, child.Protocol)
 		}
@@ -150,8 +173,8 @@ func validateRelayEntryVLESS(n *NodeSpec) error {
 }
 
 func validateRelayLanding(n *NodeSpec, kernelType string) error {
-	if kernelType != "xray" {
-		return fmt.Errorf("relay landing requires the xray kernel, got %s", kernelType)
+	if kernelType != "xray" && kernelType != "singbox" {
+		return fmt.Errorf("unsupported relay landing kernel %s", kernelType)
 	}
 	port := n.Relay.ListenPort
 	if port == 0 {
@@ -202,8 +225,37 @@ func validateRelayLanding(n *NodeSpec, kernelType string) error {
 		if decryption != "none" && !validVLESSEncryption(decryption, true) {
 			return fmt.Errorf("relay landing: invalid vless decryption")
 		}
+		if kernelType == "singbox" {
+			if err := validateSingBoxRelayVLESS(n.Network, n.Flow, decryption, n.TLS, n.NetworkSettings); err != nil {
+				return err
+			}
+		}
 	default:
 		return fmt.Errorf("relay landing: unsupported transit protocol %q", n.Relay.Protocol)
+	}
+	return nil
+}
+
+func validateSingBoxRelayVLESS(network, flow, encryption string, tlsMode int, settings map[string]any) error {
+	if network == "" {
+		network = "tcp"
+	}
+	canonical, _ := NormalizeRelayVLESSNetwork(network)
+	switch canonical {
+	case "tcp", "ws", "grpc", "httpupgrade":
+	default:
+		return fmt.Errorf("sing-box relay does not support vless transport %q", network)
+	}
+	if encryption != "" && encryption != "none" {
+		return fmt.Errorf("sing-box relay does not support VLESS Encryption")
+	}
+	if flow == "xtls-rprx-vision" && (canonical != "tcp" || tlsMode == 0) {
+		return fmt.Errorf("sing-box relay Vision requires tcp with TLS or Reality")
+	}
+	if header, ok := settings["header"].(map[string]any); canonical == "tcp" && ok {
+		if value := anyString(header["type"]); value != "" && value != "none" {
+			return fmt.Errorf("sing-box relay does not support tcp header camouflage")
+		}
 	}
 	return nil
 }
