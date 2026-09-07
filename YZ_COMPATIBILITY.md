@@ -7,6 +7,7 @@
 | 项目 | 标识 |
 | --- | --- |
 | Node 本版版本 | `v1.13-yz.21`；固定来源使用同名 Git Tag |
+| Node 本版来源 commit | `2f08f4134d352e127828e1e15aeaa4cfd479864c` |
 | 上一正式 Node 版本（回滚） | `v1.13-yz.19` |
 | Node 适用分支 | `upgrade/singbox-v1.14.0` |
 | Node 上游发布基线 | `v1.13` |
@@ -17,11 +18,14 @@
 | Node `yz.17` 验证构建 commit | `ada7bb60b18bf14b80e171030b82bc0f3412beb6` |
 | Node Release 构建工具链 | `Go 1.26.4`（`go.mod` 要求 `go 1.26`） |
 | Node Release 构建 | Node、xbctl 的 `linux/amd64` 与 `linux/arm64` 安装包、安装器、四份构建元数据和 SHA256SUMS，共 10 个附件 |
-| Node 本版 Docker 标签 | `ghcr.io/p0me1oo/yzboard-node:v1.13-yz.21`；发布流水线验证后同步 `latest` |
+| Node 本版 Docker 标签 | `ghcr.io/p0me1oo/yzboard-node:v1.13-yz.21`；完整提交标签和 `latest` 已同步并核对同一 digest |
+| Node 本版 Docker manifest | OCI index `sha256:500bd8ac445a38ae76550bc2d66c7fd9700515255ab92e9276020bc6136984a0`；包含 `linux/amd64` 与 `linux/arm64` |
 | Node 回滚 Docker manifest（yz.19） | OCI index `sha256:8b65c52c0c0f59a24c56ab48ced7a1dda9a07c6948edc3f454b41c140d999818`；包含 `linux/amd64` 与 `linux/arm64` |
-| 上一正式 Docker manifest（yz.16） | OCI index `sha256:f3e0895ebc04ac603158a5b96413e7695e5c7a1abd596ee864d7d4852b0b4665`；用于回滚版本审计 |
-| Node 本版 Docker OCI 标识 | `revision` 必须等于 `v1.13-yz.21` Tag 的完整提交，`version=v1.13-yz.21` |
+| 历史 Docker manifest（yz.16 记录） | OCI index `sha256:f3e0895ebc04ac603158a5b96413e7695e5c7a1abd596ee864d7d4852b0b4665`；用于历史版本审计 |
+| Node 本版 Docker OCI 标识 | 两架构均为 `revision=2f08f4134d352e127828e1e15aeaa4cfd479864c`、`version=v1.13-yz.21` |
 | YZboard 兼容版本 | `1.11.0`；sing-box 中转需与 Node `v1.13-yz.21` 成套使用 |
+| YZboard 本版来源 commit | `f91568d72ffb55205cbcd9b15a8476283a017683`，Tag `v1.11.0` |
+| YZboard 本版镜像 | `ghcr.io/p0me1oo/yzboard:1.11.0-f91568d`；manifest `sha256:9ec52732a2f93f77e1ae6f34e314cf9399b26a8c4febf4a82db2e32cd7e651b4` |
 | 上一正式 YZboard 兼容代码 | `eff2fa22531f2e15168d3e7e96d8ab45639b1969`（面板 `v1.9.0`） |
 | Xray 官方仓库 | `XTLS/Xray-core` |
 | Xray 上游预发布 Tag | `v26.7.11` |
@@ -29,6 +33,7 @@
 | YZ-Xray-core 源码 Tag | `v26.7.11-yz.6` |
 | YZ-Xray-core 当前已固定版本 / commit | `v26.7.11-yz.6` / `b4caa82d6414196565599c19ebc1b53e331349b6` |
 | Node 当前 Xray replace | `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260907200713-b4caa82d6414` |
+| Xray 模块校验值 | `h1:s4BnktK25n8oj8+sQmfD2n86e+JmekassicYU4F+YFs=` |
 | YZboard 兼容标识 | `xray-v26.7.11-yz.6`（面板 `1.11.0`） |
 | sing-box `require` 版本 | `v1.14.0` |
 | sing-box 实际 replacement | `github.com/P0me1oo/YZ-sing-box v1.14.0-yz.2` |
@@ -50,9 +55,39 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 
 正式 `go.mod` 与 `go.sum` 固定两个主内核的远程版本和校验值；AnyTLS 与 SS2022 兼容源码随 Node 提交固定。服务器安装版本由用户执行升级后改变。
 
+## 本版发布验证（2026-09-08）
+
+Node 的 [发布前 CI](https://github.com/P0me1oo/YZboard-Node/actions/runs/34158600477) 与
+[正式发布 CI](https://github.com/P0me1oo/YZboard-Node/actions/runs/34159504349/attempts/2) 均从上表 Node 提交执行完整 `make test`，
+各完成 637 项测试及子测试，无跳过、无竞争报告。两个架构的安装包与镜像构建、构建来源检查和镜像版本运行均通过。
+正式 CI 第一次因回环临时端口被占用而失败；新 runner 使用同一源码、Tag 和全部检查重跑后通过，首次记录保留在验证文档中。
+
+10 个 Release 附件已下载，逐个核对 `SHA256SUMS` 与 GitHub 附件摘要。四个二进制的实际构建信息与附件一致，
+均为 Go 1.26.4、对应 Linux 架构、`CGO_ENABLED=0`、上表 Node 来源和 `vcs.modified=false`。
+Node 二进制实际使用上表两个远程内核及随源码固定的 AnyTLS、SS2022 兼容模块；xbctl 不链接内核。
+
+| 正式产物 | SHA256 |
+| --- | --- |
+| `xboard-node-linux-amd64` | `5ef02f9b680c847758cf6c820f1780f089013d704602b1ee198733ee8f5d6db0` |
+| `xboard-node-linux-arm64` | `2b2d604a509446ac17d6cdd58c27807c864cdcf0e19b976d0e4dd602b4cb960d` |
+| `xbctl-linux-amd64` | `acc594ec027646aef34d70437572cacf2e8f86935630c5199a918cac3e50daf9` |
+| `xbctl-linux-arm64` | `21a141e023c071b689295ddd3d39082eee658f61004b6cd591053a03af14032e` |
+| `install.sh` | `19d5556a52da021209f10ad88d06d26e7050747df2ba00a778f08e66a1c2372a` |
+
+完整附件校验清单见 [SHA256SUMS](https://github.com/P0me1oo/YZboard-Node/releases/download/v1.13-yz.21/SHA256SUMS)。
+Node 三个镜像标签均解析到上表 manifest；面板的不可变标签、`1.11.0` 与 `latest` 也已核对一致，
+面板来源构建见 [run 34161072639](https://github.com/P0me1oo/YZboard/actions/runs/34161072639)。两仓库的两个 Linux 架构及 OCI 来源、版本均已逐项核对。
+
+Xray `v26.7.11-yz.6` 的 [三平台测试](https://github.com/P0me1oo/YZ-Xray-core/actions/runs/34158811734)、
+[多平台构建](https://github.com/P0me1oo/YZ-Xray-core/actions/runs/34158811725) 和
+[Windows 7 打包](https://github.com/P0me1oo/YZ-Xray-core/actions/runs/34158811778) 均通过。
+核心依赖以源码 Tag 固定并内嵌在 Node 安装包、镜像中；本轮未另行创建独立核心二进制 Release。
+
+发布后的补充记录使用单独的文档提交，已发布 Tag 与产物来源保持不变。生产服务器的安装版本由用户执行更新后改变。
+
 ## `yz.21` sing-box 中转与并发修复
 
-本轮在上述源码起点的未提交 HY2 实现上继续开发，配套面板为 `1.11.0`。sing-box 支持
+本版配套面板为 `1.11.0`。sing-box 支持
 VLESS/HY2 入口和 Shadowsocks/VLESS 落地，可与 Xray 混用。
 2026-09-08 固定 Xray `v26.7.11-yz.6` 和 sing-box `v1.14.0-yz.2`，更新 `go.mod`、`go.sum` 和构建标识。
 用户身份按「用户 × 线路」展开，以原生 `auth_user` 规则选路，再映射回真实用户进行限速、设备限制和计费。
@@ -71,15 +106,15 @@ Xray `yz.6` 保留 VLESS 首批缓冲上传计数修复，并同步 UDP 缓存�
 
 Linux/amd64 完整 sing-box 包并发检测耗时 126.042 秒，142 项测试及子测试全部通过，无跳过、无竞争报告；此前失败的混合内核与 gRPC 分支全部保留。YT-HK、DGN-HK 使用修复后依赖完成 60 次转发及生命周期请求，覆盖 TCP/UDP、用户增删、重复同步、重载和停止恢复。原 Xray `yz.4` 下的失败结果保留在验证文档的历史部分。
 
-上述本地及双机测试使用待发布工作区。正式 Node 安装包和镜像由发布 CI 检出固定提交构建，并核对实际模块、目标架构、来源提交和 `vcs.modified=false`。升级时先更新相关 Node，再更新面板并启用新拓扑；上一正式版本用于回滚。
+上述为发布前工作区的本地及双机验证。正式安装包和镜像已从上表固定 Node 提交构建、发布并核验；结果见本版发布验证。升级时先更新相关 Node，再更新面板并启用新拓扑；上一正式版本用于回滚。
 
-发布前完整 Node 并发检测 [run 34155848942](https://github.com/P0me1oo/YZboard-Node/actions/runs/34155848942) 在 HY2 会话关闭处发现另一类竞争，尚未进入构建和发布。补充修复固定为 Xray `yz.6`，5 项会话回归连续 10 轮 Linux 并发检测共 50 次通过，无竞争报告；完整 Node 验收必须使用这个最终依赖重新执行。
+发布前完整 Node 并发检测 [run 34155848942](https://github.com/P0me1oo/YZboard-Node/actions/runs/34155848942) 曾在 HY2 会话关闭处发现另一类竞争，该次未进入构建和发布。补充修复固定为 Xray `yz.6`，5 项会话回归连续 10 轮 Linux 并发检测共 50 次通过，无竞争报告；新依赖随后通过了上述完整 Node 发布验收。
 
-## `yz.20` HY2 前置入口基线（尚未发布）
+## `yz.20` HY2 前置入口基线（并入 yz.21 发布）
 
 本次修改起点为 Node `94e2a76e42c1f059126b588b2d02f49e54fd8246`，配套面板起点为
 `eff2fa22531f2e15168d3e7e96d8ab45639b1969`。源码目标为 Node `v1.13-yz.20` 与面板 `1.10.0`，
-提交、Tag、Release 和新镜像均需在正式发布时另行固定。
+该轮没有单独创建 `yz.20` Tag、Release 或镜像，相关功能最终随上文 `yz.21` 一同发布。
 
 HY2 前置入口复用 YZ-Xray-core `601226e180d3684a5eabb8bc901c99f499398db1` 的认证 UUID 路由能力，
 入口和落地均使用 Xray，内部协议仍为 Shadowsocks/VLESS。该轮固定依赖未变，联调发现 VLESS 出站上传漏计；后续修复与依赖接入见上文 `yz.21` 记录。

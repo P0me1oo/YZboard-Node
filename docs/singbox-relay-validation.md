@@ -1,12 +1,37 @@
 # sing-box 双内核中转验证
 
-本文对应 Node `v1.13-yz.21`、面板 `1.11.0`；当前修复结果与此前开发记录分别列出。
+本文对应 Node `v1.13-yz.21`、面板 `1.11.0`；正式发布结果与此前开发记录分别列出。
 Node 起点为 `94e2a76e42c1f059126b588b2d02f49e54fd8246`，面板起点为
 `eff2fa22531f2e15168d3e7e96d8ab45639b1969`，包含工作区中已有的 HY2 修改。
 
 当前 Xray 固定为 `v26.7.11-yz.6` / `b4caa82d6414196565599c19ebc1b53e331349b6`，sing-box 固定为
 `v1.14.0-yz.2` / `09615a105e219076330d9d2a25ea1e2e733d5427`。SS2022 关闭补丁位于 Node 的
 `compat/sing-shadowsocks`，上游基线为 `v0.2.8` / `e0612494bafdd1429e9632bc52fd278585d28690`。
+
+## 正式发布验证（2026-09-08）
+
+Node `v1.13-yz.21` 固定到 `2f08f4134d352e127828e1e15aeaa4cfd479864c`，
+面板 `v1.11.0` 固定到 `f91568d72ffb55205cbcd9b15a8476283a017683`；两者已发布。
+完整来源、镜像 digest、各产物校验值和回滚版本见 [兼容矩阵](../YZ_COMPATIBILITY.md)。
+
+Node [发布前 CI](https://github.com/P0me1oo/YZboard-Node/actions/runs/34158600477) 与
+[正式发布 CI](https://github.com/P0me1oo/YZboard-Node/actions/runs/34159504349/attempts/2) 均使用最终远程依赖执行 `make test`，
+各完成 637 项测试及子测试，无跳过、无竞争报告，包含完整 Node、AnyTLS、SS2022、Xray UDP 桥接、HY2 会话和 sing-box gRPC 回归。
+两架构安装包、镜像构建、来源核对及镜像运行版本检查均通过。
+
+正式 CI [第一次运行](https://github.com/P0me1oo/YZboard-Node/actions/runs/34159504349/attempts/1) 没有报告数据竞争，
+在 `TestSingBoxRelayVLESSTransports/httpupgrade/singbox` 因回环 TCP 端口 `bind: address already in use` 失败。
+`runtimeNode` 先用 `listen(:0)` 探测端口，再释放监听供核心启动，中间存在被其他监听或连接重新占用的窗口；该次未记录占用者。
+新 runner 使用同一提交、同一 Tag 和原有全部检查重跑后通过。未改变测试范围或断言，首次失败记录保留。
+
+Release 的 10 个附件已下载，分别与校验清单和 GitHub 附件摘要一致；四个二进制的实际构建信息与附件一致，
+均为对应 Linux 架构、固定 Node 提交和 `vcs.modified=false`。Node 二进制的实际模块为本文开头的 Xray、sing-box，
+AnyTLS 与 SS2022 使用随同提交固定的兼容源码。程序版本取自 CI 的实际运行输出；`trimpath` 构建信息不保留链接参数。
+
+Node 的版本、完整提交和 `latest` 镜像标签均为 `sha256:500bd8ac445a38ae76550bc2d66c7fd9700515255ab92e9276020bc6136984a0`。
+面板的 `1.11.0-f91568d`、`1.11.0`、`latest` 均为 `sha256:9ec52732a2f93f77e1ae6f34e314cf9399b26a8c4febf4a82db2e32cd7e651b4`，
+[面板发布 CI](https://github.com/P0me1oo/YZboard/actions/runs/34161072639) 通过；面板完整测试为 57 项、549 个断言。
+两仓库的 `linux/amd64`、`linux/arm64` 清单及各自 OCI 来源、版本均已核验。以下各节保留发布前不同依赖阶段的结果。
 
 ## 发布前 HY2 补充修复（2026-09-08）
 
@@ -179,7 +204,7 @@ AnyTLS 保持 `./compat/sing-anytls`。xbctl 自身不链接内核，版本输�
 | `xbctl-linux-arm64` | `857b2aa9c3d105ac6455d9f239a723ddf9197b3d25664b49ce412ca78b65aec4` |
 
 amd64 两个程序在 YT-HK 独立目录实际执行版本命令，输出与上述源码、版本及依赖一致；没有安装或替换现有服务。
-arm64 仅完成交叉编译及元数据核对，未进行实机运行。当前工作区尚未提交、打 Tag 或发布。
+该阶段 arm64 仅完成交叉编译及元数据核对，未进行实机运行；当时工作区尚未提交、打 Tag 或发布。
 
 ## 首轮本地回归（2026-09-07，Xray yz.3）
 
