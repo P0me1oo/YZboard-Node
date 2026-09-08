@@ -22,7 +22,9 @@
 ## 已完成的本地检查
 
 ```bash
+# Node 仓库
 go test -mod=readonly -tags 'with_quic with_utls with_wireguard with_acme with_clash_api' ./...
+# 面板仓库
 php -d extension=pdo_sqlite -d extension=sqlite3 vendor/bin/phpunit --colors=never
 ```
 
@@ -62,8 +64,25 @@ firewalld 自身 `reload` 会删除测试中的 xtables 运行时手工链，已
 
 ## 构建与验证限制
 
-合并固定安装器提交 `b5ce51f5dea000545d8a4ea6adde0074a9ee7146` 后，`cmd/xbctl`、`internal/config`、`internal/buildinfo`、`internal/firewall` 的普通测试及 xbctl、防火墙的 `go vet` 通过。安装器脚本语法、服务文件测试和 20 个安装目录场景通过；迁移测试使用 C、F 两个文件系统，所有操作位于测试临时目录。
+合并固定安装器提交 `b5ce51f5dea000545d8a4ea6adde0074a9ee7146` 后，上述完整普通 Go 回归再次通过；`cmd/xbctl`、`internal/config`、`internal/buildinfo`、`internal/firewall` 的定向测试及 xbctl、防火墙的 `go vet` 通过。安装器脚本语法、服务文件测试和 20 个安装目录场景通过；迁移测试使用 C、F 两个文件系统，所有操作位于测试临时目录。
 
-固定提交双架构构建及校验记录在完成后补充。Linux amd64 的实际转发结果不代表已完成 arm64 实际转发。
+Node 功能提交为 `ade17c59c021fdeeec7a19c4ebb5e5cb9ccce17f`，合并后的构建来源为 `7b3a7b434790ecf7238b4977d02db5610b4db7e5`，配套面板功能提交为 `cee871e25a54b180e384346689664f538c8c2887`。合并只增加已验证的安装器和 xbctl 改动，Node 运行代码、内核依赖与实机测试时一致。
+
+从干净提交生成 Node 和 xbctl 的 Linux amd64、arm64 二进制，使用版本 `v1.13-yz.24-dev`、Go 1.26.4、`CGO_ENABLED=0`、`-mod=readonly`、`-trimpath` 和 `-buildvcs=true`。四份构建信息均确认完整来源、目标系统和架构、`vcs.modified=false`；两个 Node 二进制实际解析到兼容矩阵中的 Xray 和 sing-box 固定版本。
+
+Go 在 `-trimpath` 构建信息中不记录 `ldflags`，因此另外核对二进制里的版本值。最终 amd64 两个程序上传后重新核对摘要，并在隔离 rootfs 中执行版本命令，运行输出与上述版本、来源一致。arm64 完成编译、版本值和元数据检查，未进行 arm64 运行或实际转发。
+
+| 程序 | 架构 | 字节数 | SHA256 |
+| --- | --- | --- | --- |
+| Node | Linux amd64 | `74907810` | `9be64a99154b338c8c045a46fa0bfdf6f202170fea670ff079705a19a3950aba` |
+| xbctl | Linux amd64 | `7278754` | `77132c1b084f73155dc9f06e4f01e3274c03a9afe63083061056fdb4242f265a` |
+| Node | Linux arm64 | `69402786` | `5ec1cbda7ba0e73c598a841cf5d9d20fd31554eddaa25c40d0cb800d43c92e62` |
+| xbctl | Linux arm64 | `6750370` | `51cdbf55f3dd7d7d739e2369c6350d3e58c51c881e16dbd2321e9cb40daf4475` |
+
+本轮是独立功能分支的测试构建，没有创建正式 Tag、Release 或生产镜像。源码记录与二进制元数据用于后续合并和发布审核，不替代正式发布验证。
+
+## 测试清理和运行限制
+
+YT-HK 本次 rootfs、临时程序、实例、认证值、证书和日志均已清理；清理前检查专用目录没有剩余挂载或以该 rootfs 运行的进程。本次打开的 SSH 会话已关闭。仅保留本地四个构建产物、构建元数据和校验清单。
 
 运行中的 Node 每 30 秒恢复缺失规则。正常退出会回收规则；`SIGKILL` 或断电无法立即执行清理，需以后再次使用同一配置路径启动回收。已有手工放行不由 Node 删除，因此停用节点后仍可能保留管理员主动开放的端口。
