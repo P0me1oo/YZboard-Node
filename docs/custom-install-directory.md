@@ -45,8 +45,34 @@ bash tests/install_paths_test.sh
 
 `xbctl` 的 `linux/amd64` 与 `linux/arm64` 交叉编译均通过，使用 `CGO_ENABLED=0`、`-mod=readonly`、`-trimpath` 和 `-buildvcs=true`。构建版本参数为 `v1.13-yz.23-dev`；两份产物的构建信息均确认来源为上述修改基线、`vcs.modified=true`，对应未提交工作区。模块解析未新增依赖；这些临时产物仅用于构建检查，检查后清理，不作为正式发布。
 
-本地检查不能替代真实 Linux 服务启动、机器重启及正式发布构建的验证；正式 CI 已接入新增安装器测试。正式发布后在本节记录固定来源与产物验证结果。本次未进行生产迁移。
+本地检查不能替代真实 Linux 服务启动、机器重启及正式发布构建的验证；正式 CI 已接入新增安装器测试，发布构建与产物验证结果见下文。本次未进行生产迁移。
 
 ## 发布前 Linux 检查
 
-发布前 Linux CI 发现同目录升级收到终止信号时重复执行回滚。[失败场景日志](https://github.com/P0me1oo/YZboard-Node/actions/runs/34268427384) 确认：信号处理已恢复旧文件，随后 Bash 又触发 `ERR`，再次恢复时删除了已经归位的程序。错误和信号处理入口现均关闭 `ERR` 回调，原有中断用例继续保留；Linux 全量复验结果在正式发布后补充。
+发布前 Linux CI 发现同目录升级收到终止信号时重复执行回滚。[失败场景日志](https://github.com/P0me1oo/YZboard-Node/actions/runs/34268427384) 确认：信号处理已恢复旧文件，随后 Bash 又触发 `ERR`，再次恢复时删除了已经归位的程序。错误和信号处理入口现均关闭 `ERR` 回调，原有中断用例继续保留；修复后本地跨文件系统测试和 Linux 20 个安装器场景均通过。
+
+修复后的[第一次全量检查](https://github.com/P0me1oo/YZboard-Node/actions/runs/34269113262/attempts/1) 在 `internal/kernel/singbox` 包的 `TestSingBoxRelayVLESSTransports/httpupgrade/singbox` 用例遇到一次 `EOF`，位置为 `relay_runtime_test.go:195`。执行命令为 `make test` 中的 `go test -mod=readonly -v -race -count=1 -tags "with_quic with_utls with_wireguard with_acme with_clash_api" ./...`。该中转代码和内核依赖与 `v1.13-yz.22` 一致，未在本次修改中调整。
+
+使用同一提交和全部检查[重跑](https://github.com/P0me1oo/YZboard-Node/actions/runs/34269113262/attempts/2) 后通过；Windows 下单独重复该用例 20 轮也通过：
+
+```bash
+go test -mod=readonly -count=20 \
+  -tags 'with_quic with_utls with_wireguard with_acme with_clash_api' \
+  -run '^TestSingBoxRelayVLESSTransports$/^httpupgrade$/^singbox$' \
+  ./internal/kernel/singbox
+```
+
+这次 `EOF` 的根因未确认，未据此修改内核或删除、跳过、放宽测试。后续正式发布从同一源码执行的完整检查也通过。
+
+## 正式发布验证
+
+`v1.13-yz.23` 已于新加坡时间 2026-09-09 发布，固定源码为 `1944c8eb7982c4f6156d6adff8e8a734cdc1813b`。
+[正式 CI](https://github.com/P0me1oo/YZboard-Node/actions/runs/34270886003) 完成 Linux `make test`：690 项 Go 测试及子测试、20 个安装器场景和已有服务文件测试通过，无失败、无跳过、无数据竞争报告。
+
+Node 与 xbctl 的 Linux amd64、arm64 安装包和双架构镜像均已构建；10 个 [Release 附件](https://github.com/P0me1oo/YZboard-Node/releases/tag/v1.13-yz.23) 已下载，逐项核对 GitHub 摘要、`SHA256SUMS` 和实际构建信息。四个二进制的来源、目标架构、Go 1.26.4、`CGO_ENABLED=0` 与 `vcs.modified=false` 均符合正式构建要求。CI 已运行 amd64 的两个程序及双架构 Node 镜像，核对版本和来源；arm64 镜像版本检查通过 QEMU 执行。
+
+镜像 `ghcr.io/p0me1oo/yzboard-node:v1.13-yz.23`、完整提交标签与 `latest` 均指向 `sha256:e041bab08ea982bd205cbe72e93509175de79cbb2c827f73e80d7c7ea76810c2`。两个平台的 OCI 来源与版本一致，匿名读取通过。各附件校验值、平台 manifest 和 `v1.13-yz.22` 回退引用见 [兼容矩阵](../YZ_COMPATIBILITY.md)。
+
+本版 amd64 两个程序合计约 78.24 MiB，同目录升级的两套程序内容约 156.48 MiB；配置备份、日志和其他文件另计。安装器在目标程序分区暂存大文件，配置备份和目录记录仍需少量根分区空间。
+
+本次安装器验证使用隔离目录和模拟服务，没有执行真实服务器迁移、Linux 实机服务启动与系统重启挂载验收，也没有进行 arm64 实际转发。发布结果以独立文档提交记录，正式 Tag 保持不变。
