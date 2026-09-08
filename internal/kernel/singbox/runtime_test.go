@@ -282,6 +282,10 @@ func runtimeCertificate(t *testing.T) kernel.TLSCert {
 }
 
 func runtimeClient(t *testing.T, node *model.NodeSpec, user model.UserSpec) adapter.Outbound {
+	return runtimeClientWithTLS(t, node, user, nil)
+}
+
+func runtimeClientWithTLS(t *testing.T, node *model.NodeSpec, user model.UserSpec, tlsOptions map[string]any) adapter.Outbound {
 	t.Helper()
 	protocol := node.Protocol
 	if protocol == "hysteria" && node.Version == 2 {
@@ -321,6 +325,12 @@ func runtimeClient(t *testing.T, node *model.NodeSpec, user model.UserSpec) adap
 	}
 	if protocol == "trojan" || protocol == "anytls" || protocol == "hysteria" || protocol == "hysteria2" || protocol == "tuic" {
 		opts["tls"] = map[string]any{"enabled": true, "insecure": true, "server_name": "localhost", "alpn": []string{"h3"}}
+	}
+	if tlsOptions != nil {
+		opts["tls"] = tlsOptions
+	}
+	if protocol == "hysteria2" && node.Obfs != "" {
+		opts["obfs"] = map[string]any{"type": node.Obfs, "password": node.ObfsPassword}
 	}
 	data, err := json.Marshal(map[string]any{"log": map[string]any{"disabled": true}, "outbounds": []any{opts}})
 	if err != nil {

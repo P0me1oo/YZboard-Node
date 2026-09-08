@@ -729,6 +729,9 @@ func (x *Xray) ensureGeoData(nc *model.NodeSpec) {
 // marshalConfig builds the xray JSON config and returns the raw bytes.
 func marshalConfig(cfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) ([]byte, error) {
 	cfgMap := buildConfig(cfg, nc, users, tls)
+	if err := validateHysteriaECHKeys(nc, cfgMap); err != nil {
+		return nil, err
+	}
 	data, err := json.MarshalIndent(cfgMap, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal config: %w", err)

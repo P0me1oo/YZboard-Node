@@ -6,6 +6,7 @@
 面板通过 `relay` 段下发。
 
 面板 `1.11.0` 与 Node `v1.13-yz.21` 的源码实现支持 Xray、sing-box 入口与落地混用。
+面板 `1.12.0` 与 Node `v1.13-yz.22` 进一步支持 HY2 ECH 入口。
 发布引用、固定核心依赖与验证状态见 [兼容矩阵](YZ_COMPATIBILITY.md)。
 
 ## 路由编号
@@ -49,8 +50,25 @@ Node `v1.13-yz.20` 配合面板 `1.10.0` 新增 Xray HY2 前置入口；`v1.13-y
 入口与落地可以分别选择 Xray 或 sing-box，内部链路支持 Shadowsocks 和 VLESS。
 
 可选混淆支持 Salamander，Node 将 `obfs`、`obfs-password` 映射为 Xray 的 UDP 混淆参数，
-同时保留带宽参数。混淆密码至少 4 字节。HY1、HY2 ECH 和其它混淆类型在中转校验时拒绝。
+同时保留带宽参数。混淆密码至少 4 字节。HY1 和其它混淆类型在中转校验时拒绝。
 普通 HY2 节点不增加 `relay` 段，面板也不改写其认证值。
+
+### HY2 ECH
+
+Node `v1.13-yz.22` 配合面板 `1.12.0` 支持开启 ECH 的 HY2 前置入口。
+入口仍需要有效的 TLS 证书；ECH 不改变中转路由、落地协议、用户热更新和流量报告格式。
+
+面板的 `protocol_settings.tls.ech` 已映射为 Node 顶层 `tls_settings.ech`。
+启用时必须提供 `key` 或 `key_path`；Xray 将 PEM／Base64 密钥写入 `tlsSettings.echServerKeys`，
+sing-box 使用原生 `tls.ech.key`／`key_path`。内联密钥优先，Xray 读取或解析失败时返回配置错误，
+不会因缺少密钥而省略 ECH 后继续生成普通 HY2 配置。sing-box 的文件和格式校验由固定内核完成。
+
+客户端选择 sing-box JSON 或支持 ECH 的 Mihomo YAML 订阅，使用入口公共配置和各逻辑节点的认证值。
+服务端私钥只下发给入口。Mihomo 实测最低版本为 `1.19.9`；应用外壳版本不能替代内核版本。
+本次没有为通用 HY2 分享 URI 声明 ECH 参数支持。
+
+本地实测覆盖 Xray／sing-box 入口及落地混用、TCP/UDP、Salamander、错误公共配置拒绝、
+ECH 密钥轮换、用户与节点生命周期及精确计数，详情见 [验证记录](docs/hy2-ech-validation.md)。
 
 ## 入口节点配置
 

@@ -1,5 +1,13 @@
 # 变更记录
 
+## v1.13-yz.22 - 2026-09-08
+
+- HY2 中转入口支持 ECH，Xray 和 sing-box 均可继续转发到两种内核的 VLESS／SS2022 落地，沿用现有路由认证和流量报告。
+- 修复 Xray HY2 单独生成 TLS 配置时遗漏 `echServerKeys` 的问题，支持内联 PEM、Base64 和密钥文件；ECH 开启但密钥缺失、无法读取或列表无法解析时，阻止生成运行配置。
+- 中转校验改为要求 HY2 ECH 密钥来源，保留 HY1、混淆和落地协议校验。固定 Xray `v26.7.11-yz.6`、sing-box `v1.14.0-yz.2` 及兼容模块保持不变。
+- 增加实际 ECH 接受状态、错误公钥拒绝、跨内核 TCP/UDP 中转、Salamander、用户增删、重复同步、密钥轮换和恢复计数验证；可使用官方 Mihomo 客户端直接消费面板构建器输出做联测。
+- 配套面板版本为 `1.12.0`。验证范围和环境限制见 [HY2 ECH 验证记录](docs/hy2-ech-validation.md)，正式发布引用见兼容矩阵。
+
 ## v1.13-yz.21 - 2026-09-08
 
 - sing-box 新增 VLESS/Hysteria2 中转入口，以及 Shadowsocks/VLESS 内部落地，支持与 Xray 混用；沿用现有 `relay` 配置和订阅中的线路编号。

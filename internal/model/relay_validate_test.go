@@ -180,9 +180,18 @@ func TestValidateNodeSpec_Hysteria2Relay(t *testing.T) {
 		{"sing-box", func(*panel.NodeConfig) {}, "singbox", ""},
 		{"未知混淆", func(n *panel.NodeConfig) { n.Obfs = "unknown" }, "xray", "obfuscation"},
 		{"缺少混淆密码", func(n *panel.NodeConfig) { n.Obfs = "salamander" }, "xray", "password"},
-		{"ECH", func(n *panel.NodeConfig) {
+		{"ECH缺少密钥", func(n *panel.NodeConfig) {
 			n.TLSSettings = map[string]any{"ech": map[string]any{"enabled": true}}
 		}, "xray", "ECH"},
+		{"ECH内联密钥", func(n *panel.NodeConfig) {
+			n.TLSSettings = map[string]any{"ech": map[string]any{"enabled": true, "key": "test-only-pem-placeholder"}}
+		}, "xray", ""},
+		{"ECH密钥文件", func(n *panel.NodeConfig) {
+			n.TLSSettings = map[string]any{"ech": map[string]any{"enabled": true, "key_path": "test-only-ech.pem"}}
+		}, "singbox", ""},
+		{"ECH空白密钥", func(n *panel.NodeConfig) {
+			n.TLSSettings = map[string]any{"ech": map[string]any{"enabled": true, "key": " \n", "key_path": " "}}
+		}, "singbox", "ECH"},
 		{"混淆", func(n *panel.NodeConfig) {
 			n.Obfs, n.ObfsPassword = "salamander", strings.Repeat("test", 4)
 		}, "xray", ""},

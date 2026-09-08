@@ -11,6 +11,7 @@ import (
 	"github.com/cedar2025/xboard-node/internal/kernel"
 	"github.com/cedar2025/xboard-node/internal/model"
 	"github.com/cedar2025/xboard-node/internal/nlog"
+	xrayTLS "github.com/xtls/xray-core/transport/internet/tls"
 )
 
 // M is a shorthand for building JSON-like maps
@@ -512,10 +513,14 @@ func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel
 			"certificate": []string{string(tc.CertPEM)},
 			"key":         []string{string(tc.KeyPEM)},
 		}
-		ss["tlsSettings"] = M{
+		tlsSettings := M{
 			"certificates": []M{tlsCert},
 			"alpn":         []string{"h3"},
 		}
+		if echKeys := extractECHServerKeys(nc.TLSSettings); echKeys != "" {
+			tlsSettings["echServerKeys"] = echKeys
+		}
+		ss["tlsSettings"] = tlsSettings
 	} else {
 		nlog.Core().Warn("hysteria requires TLS certificate files; configure cert_mode (self, file, http, dns, or content)")
 	}
@@ -817,6 +822,45 @@ func sanitizeEmptyArrays(m map[string]interface{}) {
 			sanitizeEmptyArrays(val)
 		}
 	}
+}
+
+// validateHysteriaECHKeys 校验实际生成的密钥，避免再次读取文件时与配置内容不一致。
+func validateHysteriaECHKeys(nc *model.NodeSpec, cfg M) error {
+	if nc.Protocol != "hysteria" || nc.Version != 2 {
+		return nil
+	}
+	ech, _ := nc.TLSSettings["ech"].(map[string]any)
+	if ech["enabled"] != true {
+		return nil
+	}
+	var encoded string
+	inbounds, _ := cfg["inbounds"].([]M)
+	for _, inbound := range inbounds {
+		if inbound["protocol"] != "hysteria" {
+			continue
+		}
+		stream, _ := inbound["streamSettings"].(M)
+		tlsSettings, _ := stream["tlsSettings"].(M)
+		encoded, _ = tlsSettings["echServerKeys"].(string)
+		break
+	}
+	if encoded == "" {
+		return fmt.Errorf("hysteria2 ECH: missing or unreadable server keys")
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return fmt.Errorf("hysteria2 ECH: invalid server key encoding")
+	}
+	keys, err := xrayTLS.ConvertToGoECHKeys(data)
+	if err != nil || len(keys) == 0 {
+		return fmt.Errorf("hysteria2 ECH: invalid server key list")
+	}
+	for _, key := range keys {
+		if len(key.PrivateKey) == 0 || len(key.Config) == 0 {
+			return fmt.Errorf("hysteria2 ECH: invalid server key entry")
+		}
+	}
+	return nil
 }
 
 // extractECHServerKeys extracts the ECH private key from tls_settings.ech

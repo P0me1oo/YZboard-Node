@@ -74,7 +74,9 @@ func validateRelayEntry(n *NodeSpec, kernelType string, availableTags map[string
 			return fmt.Errorf("relay entry: salamander password must contain at least 4 bytes")
 		}
 		if ech, ok := n.TLSSettings["ech"].(map[string]any); ok && ech["enabled"] == true {
-			return fmt.Errorf("relay entry: hysteria2 ECH is not supported")
+			if strings.TrimSpace(anyString(ech["key"])) == "" && strings.TrimSpace(anyString(ech["key_path"])) == "" {
+				return fmt.Errorf("relay entry: hysteria2 ECH requires key or key_path")
+			}
 		}
 	default:
 		return fmt.Errorf("relay entry requires a vless or hysteria2 inbound, got %q", n.Protocol)
