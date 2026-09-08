@@ -7,6 +7,11 @@ TEST_ROOT=$(mktemp -d "$TEST_PARENT/yzboard-install-paths.XXXXXX")
 TEST_BIN_PARENT=$(cd "${YZ_TEST_BIN_PARENT:-$TEST_PARENT}" && pwd -P)
 TEST_BIN_ROOT=$(mktemp -d "$TEST_BIN_PARENT/yzboard-install-binaries.XXXXXX")
 cleanup() {
+    local exit_code=$?
+    if [ "$exit_code" -ne 0 ] && [ -n "${case_name:-}" ] && [ -f "$TEST_ROOT/$case_name.log" ]; then
+        printf '安装器场景失败：%s\n' "$case_name" >&2
+        cat "$TEST_ROOT/$case_name.log" >&2
+    fi
     case "$TEST_ROOT" in
         "$TEST_PARENT"/yzboard-install-paths.*) rm -rf -- "$TEST_ROOT" ;;
         *) echo "拒绝清理范围外的测试目录" >&2; return 1 ;;
