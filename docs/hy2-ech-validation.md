@@ -100,12 +100,31 @@ Node 与 xbctl 的 `linux/amd64`、`linux/arm64` 构建均通过，使用 `CGO_E
 | `xbctl-linux-amd64` | `ccad5fb8c9cb1fe7a8001de988d7dc2e41b2f2d94b2b1ea760e229690ce0bd38` |
 | `xbctl-linux-arm64` | `d0039af5fc2bb99456cc0565f29ec2df8c7a146ce3c6a78b8ec135d1ea4bab26` |
 
+## 正式发布验证
+
+Node `v1.13-yz.22` 固定来源为 `2aa021b65481a14b1d34ff9f594939387c5f0f05`。
+[正式发布 CI](https://github.com/P0me1oo/YZboard-Node/actions/runs/34172378951) 在 Linux runner 上完成
+`make test`，包括主模块和六组兼容模块的数据竞争检测，共 661 项测试及子测试通过，失败、跳过和竞争报告均为 0。
+其中 HY2 ECH 相关测试及子测试为 21 项，包含实际握手和八组中转组合。
+本节的 Linux 结果补充前文 Windows 开发阶段的验证，外部 Mihomo 客户端仍以本地联测结果为准。
+
+[Release](https://github.com/P0me1oo/YZboard-Node/releases/tag/v1.13-yz.22) 的 10 个附件已下载，
+逐个核对 GitHub 附件摘要、`SHA256SUMS` 和实际二进制模块信息。四个程序均为 Go `1.26.4`、
+对应 Linux 架构、`CGO_ENABLED=0`、上述来源和 `vcs.modified=false`，运行版本为 `v1.13-yz.22`。
+两个 Node 程序解析出的 Xray、sing-box 和本地兼容模块与本页固定依赖一致。
+
+镜像版本标签、完整提交标签和 `latest` 已核对为同一 manifest：
+`sha256:8c831eca80ebc66680055e0f6f443a2c0e1830a28fc6bab638fc7a0487a54235`。
+两架构的 OCI 来源与版本一致，并通过镜像内运行版本检查；arm64 版本检查使用 QEMU。
+正式产物校验值与面板配套发布信息见 [兼容矩阵](../YZ_COMPATIBILITY.md)。
+
 ## 环境限制与清理
 
 `go test -mod=readonly -race -count=1 -tags 'with_quic with_utls with_wireguard with_acme with_clash_api' ./internal/kernel/xray ./internal/kernel/singbox -run 'TestHysteria2ECH' -timeout 4m`
 在默认环境提示 `-race requires cgo`；本次仅在测试进程设置 `CGO_ENABLED=1` 后，两个内核测试包仍因
-`cgo: C compiler "gcc" not found` 无法构建。该限制来自本机工具链，不能把普通测试结果当作 race 通过。
-本次没有在 Linux 上执行实际转发，没有真实服务器测试，也没有验证外部 DNS HTTPS 记录提供 ECH 配置的部署。
+`cgo: C compiler "gcc" not found` 无法构建。该限制来自本机工具链；后续正式 Linux CI 已完成数据竞争检测。
+Windows 开发阶段未执行 Linux 转发，正式 CI 已在 Linux amd64 runner 上执行实际回环转发。
+本次没有进行 arm64 实际转发或真实服务器测试，也没有验证外部 DNS HTTPS 记录提供 ECH 配置的部署。
 
 所有测试实例监听回环地址，临时证书、身份、配置和 ECH 密钥由测试目录自动清理。
 外部 Mihomo 进程已停止。下载文件、管理端资源副本和一次性开发构建保留在
