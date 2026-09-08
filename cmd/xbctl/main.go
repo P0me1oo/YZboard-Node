@@ -29,8 +29,6 @@ const (
 	defaultConfigPath      = "/etc/xboard-node/config.yml"
 	defaultMetaPath        = "/etc/xboard-node/install-meta.json"
 	defaultCredentialsPath = "/etc/xboard-node/credentials.env"
-	defaultBinaryPath      = "/usr/local/bin/xboard-node"
-	defaultCLIPath         = "/usr/local/bin/xbctl"
 	defaultInstallRoot     = "/etc/xboard-node"
 	downloadBase           = "https://github.com/P0me1oo/YZboard-Node/releases"
 )
@@ -214,6 +212,7 @@ func printUsage() {
   xbctl instance get <id> [--output text|json]
   xbctl config init --mode node|machine --panel-url URL --token TOKEN [flags]
   xbctl config health-port [--config PATH]
+  xbctl config bin-dir [--path-file PATH]
   xbctl config kernel <xray|singbox> [--instance ID] [--config PATH] [--force]
   xbctl service status|start|stop|restart|enable|disable|logs
   xbctl health
@@ -246,6 +245,9 @@ func runStatus() error {
 		ver = meta.Version
 	}
 	fmt.Printf("  version:  %s\n", ver)
+	if paths, err := loadInstallPaths(defaultBinDirFile); err == nil {
+		fmt.Printf("  bin-dir:  %s\n", paths.binDir)
+	}
 
 	// Service status
 	svc := serviceState()
@@ -513,157 +515,62 @@ func runUpgrade(args []string) error {
 	if err := ensureRoot("upgrade"); err != nil {
 		return err
 	}
-
-	version := "latest"
+	release := "latest"
 	for i := 0; i < len(args); i++ {
-		if args[i] == "--version" && i+1 < len(args) {
-			version = args[i+1]
-			i++
+		if args[i] != "--version" || i+1 >= len(args) || args[i+1] == "" {
+			return errors.New("usage: xbctl upgrade [--version VERSION]; change the binary directory with install.sh upgrade --bin-dir PATH")
 		}
+		i++
+		release = args[i]
 	}
-
-	arch := runtime.GOARCH
-	if arch != "amd64" && arch != "arm64" {
-		return fmt.Errorf("unsupported architecture: %s", arch)
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		return fmt.Errorf("unsupported architecture: %s", runtime.GOARCH)
+	}
+	unlock, err := lockInstallation(defaultInstallRoot)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	paths, err := loadInstallPaths(defaultBinDirFile)
+	if err != nil {
+		return err
 	}
 	manager, err := detectServiceManager()
 	if err != nil {
 		return err
 	}
 
-	fmt.Println("Starting upgrade...")
-
-	binaryDir := filepath.Dir(defaultBinaryPath)
-	cliDir := filepath.Dir(defaultCLIPath)
-	newBinary := filepath.Join(binaryDir, ".xboard-node.new")
-	newCLI := filepath.Join(cliDir, ".xbctl.new")
-
-	binaryURL := resolveDownloadURL(fmt.Sprintf("xboard-node-linux-%s", arch), version)
-	cliURL := resolveDownloadURL(fmt.Sprintf("xbctl-linux-%s", arch), version)
-	checksumsURL := resolveDownloadURL("SHA256SUMS", version)
-	checksumsPath := filepath.Join(binaryDir, ".xboard-node.SHA256SUMS.new")
-	defer os.Remove(checksumsPath)
-
-	fmt.Printf("Downloading %s...\n", checksumsURL)
-	if err := downloadFile(checksumsURL, checksumsPath); err != nil {
-		return fmt.Errorf("download release checksums: %w", err)
-	}
-	checksums, err := os.ReadFile(checksumsPath)
+	fmt.Printf("Starting upgrade in %s...\n", paths.binDir)
+	newVer, err := upgradeBinaries(paths, release, upgradeOperations{
+		download: func(url, destination string) error {
+			fmt.Printf("Downloading %s...\n", url)
+			return downloadFile(url, destination)
+		},
+		run: func(file string, args ...string) ([]byte, error) {
+			return exec.Command(file, args...).CombinedOutput()
+		},
+		restart: func() error {
+			fmt.Println("Restarting service...")
+			if err := reloadServiceManager(manager); err != nil {
+				return err
+			}
+			return runManagedService(manager, "restart", false)
+		},
+		rename: os.Rename,
+	})
 	if err != nil {
-		return fmt.Errorf("read release checksums: %w", err)
+		return err
 	}
 
-	fmt.Printf("Downloading %s...\n", binaryURL)
-	if err := downloadFile(binaryURL, newBinary); err != nil {
-		return fmt.Errorf("download binary: %w", err)
-	}
-
-	fmt.Printf("Downloading %s...\n", cliURL)
-	if err := downloadFile(cliURL, newCLI); err != nil {
-		os.Remove(newBinary)
-		return fmt.Errorf("download xbctl: %w", err)
-	}
-	if err := verifyReleaseChecksum(newBinary, fmt.Sprintf("xboard-node-linux-%s", arch), checksums); err != nil {
-		return cleanupFiles(newBinary, newCLI, err)
-	}
-	if err := verifyReleaseChecksum(newCLI, fmt.Sprintf("xbctl-linux-%s", arch), checksums); err != nil {
-		return cleanupFiles(newBinary, newCLI, err)
-	}
-
-	if err := os.Chmod(newBinary, 0o755); err != nil {
-		return cleanupFiles(newBinary, newCLI, fmt.Errorf("chmod binary: %w", err))
-	}
-	if err := os.Chmod(newCLI, 0o755); err != nil {
-		return cleanupFiles(newBinary, newCLI, fmt.Errorf("chmod xbctl: %w", err))
-	}
-
-	// Validate downloaded binaries
-	if out, err := exec.Command(newBinary, "-v").CombinedOutput(); err != nil {
-		return cleanupFiles(newBinary, newCLI, fmt.Errorf("binary version check failed: %s", string(out)))
-	}
-	if out, err := exec.Command(newCLI, "version").CombinedOutput(); err != nil {
-		return cleanupFiles(newBinary, newCLI, fmt.Errorf("xbctl version check failed: %s", string(out)))
-	}
-
-	// Backup existing binaries
-	backupBinary := defaultBinaryPath + ".bak"
-	backupCLI := defaultCLIPath + ".bak"
-	// Backup existing binaries
-	if fileExists(defaultBinaryPath) {
-		if err := copyFile(defaultBinaryPath, backupBinary); err != nil {
-			return cleanupFiles(newBinary, newCLI, fmt.Errorf("backup binary: %w", err))
-		}
-	}
-	if fileExists(defaultCLIPath) {
-		if err := copyFile(defaultCLIPath, backupCLI); err != nil {
-			return cleanupFiles(newBinary, newCLI, fmt.Errorf("backup xbctl: %w", err))
-		}
-	}
-
-	// Atomic rename
-	if err := os.Rename(newBinary, defaultBinaryPath); err != nil {
-		return cleanupFiles(newBinary, newCLI, fmt.Errorf("replace binary: %w", err))
-	}
-	if err := os.Rename(newCLI, defaultCLIPath); err != nil {
-		if fileExists(backupBinary) {
-			os.Rename(backupBinary, defaultBinaryPath)
-		}
-		os.Remove(newCLI)
-		return fmt.Errorf("replace xbctl: %w", err)
-	}
-
-	// Recreate /usr/bin/xbctl symlink
-	os.Remove("/usr/bin/xbctl")
-	os.Symlink(defaultCLIPath, "/usr/bin/xbctl")
-
-	// Restart service
-	fmt.Println("Restarting service...")
-	if err := reloadServiceManager(manager); err != nil {
-		fmt.Printf("Warning: reload service manager failed: %v\n", err)
-	}
-	if err := runManagedService(manager, "restart", false); err != nil {
-		fmt.Println("Restart failed, rolling back...")
-		rollbackOK := true
-		if fileExists(backupBinary) {
-			if e := os.Rename(backupBinary, defaultBinaryPath); e != nil {
-				fmt.Printf("Warning: rollback binary failed: %v\n", e)
-				rollbackOK = false
-			}
-		}
-		if fileExists(backupCLI) {
-			if e := os.Rename(backupCLI, defaultCLIPath); e != nil {
-				fmt.Printf("Warning: rollback xbctl failed: %v\n", e)
-				rollbackOK = false
-			}
-		}
-		reloadServiceManager(manager)
-		if e := runManagedService(manager, "restart", false); e != nil {
-			return fmt.Errorf("upgrade and rollback restart both failed: %w", e)
-		}
-		if rollbackOK {
-			return errors.New("upgrade failed: service restart failed, rolled back successfully")
-		}
-		return errors.New("upgrade failed: partial rollback, check binary state manually")
-	}
-
-	// Clean up backups
-	os.Remove(backupBinary)
-	os.Remove(backupCLI)
-
-	// Update install-meta.json
-	newVer := version
-	if out, err := exec.Command(defaultBinaryPath, "-v").CombinedOutput(); err == nil {
-		newVer = installedVersion(version, out)
-	}
 	if root, err := loadWritableRootConfig(defaultConfigPath); err == nil {
 		instances, _ := root.NormalizeInstances()
-		writeInstallMetaVersioned(defaultMetaPath, root, newVer, latestInstanceID(instances))
+		if err := writeInstallMetaVersioned(defaultMetaPath, root, newVer, latestInstanceID(instances)); err != nil {
+			fmt.Printf("Warning: update install metadata failed: %v\n", err)
+		}
 	}
-
 	fmt.Printf("Upgrade complete (version: %s)\n", newVer)
 	return nil
 }
-
 func runUninstall(args []string) error {
 	if err := ensureRoot("uninstall"); err != nil {
 		return err
@@ -691,6 +598,15 @@ func runUninstall(args []string) error {
 	}
 
 	var warnings []string
+	unlock, err := lockInstallation(defaultInstallRoot)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	paths, err := loadInstallPaths(defaultBinDirFile)
+	if err != nil {
+		return err
+	}
 
 	manager, managerErr := detectServiceManager()
 	if managerErr != nil {
@@ -715,9 +631,8 @@ func runUninstall(args []string) error {
 		reloadServiceManager(manager)
 	}
 
-	// Remove binaries
-	// Remove binaries and symlinks
-	for _, p := range []string{defaultBinaryPath, defaultCLIPath, "/usr/bin/xbctl"} {
+	// 仅删除已登记目录中的程序和管理入口，不删除用户选择的目录。
+	for _, p := range []string{paths.binary(), paths.cli(), "/usr/bin/xbctl", defaultBinDirFile} {
 		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 			warnings = append(warnings, fmt.Sprintf("remove %s: %v", p, err))
 		}
@@ -774,9 +689,11 @@ func downloadFile(url, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func verifyReleaseChecksum(path, artifact string, checksums []byte) error {
@@ -823,23 +740,9 @@ func installedVersion(requested string, report []byte) string {
 	return "unknown"
 }
 
-func cleanupFiles(a, b string, err error) error {
-	os.Remove(a)
-	os.Remove(b)
-	return err
-}
-
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(dst, data, 0o755)
 }
 
 func runCommand(name string, args ...string) error {
@@ -1384,7 +1287,7 @@ func machineIDPtr(cfg *config.Config) *int {
 
 func runConfig(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: xbctl config <init|health-port|kernel|refresh-meta>")
+		return errors.New("usage: xbctl config <init|health-port|kernel|refresh-meta|bin-dir>")
 	}
 	switch args[0] {
 	case "init":
@@ -1395,6 +1298,8 @@ func runConfig(args []string) error {
 		return runConfigKernel(args[1:])
 	case "refresh-meta":
 		return runConfigRefreshMeta(args[1:])
+	case "bin-dir":
+		return runConfigBinDir(args[1:])
 	default:
 		return fmt.Errorf("unknown config command: %s", args[0])
 	}

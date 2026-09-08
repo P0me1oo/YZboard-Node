@@ -69,6 +69,27 @@ sudo xbctl upgrade --version latest
 
 `yz.19` 的安装器和服务模板将停止等待时间设为 150 秒。已有部署若只通过 `xbctl upgrade` 替换二进制，需要另行同步服务的停止等待设置：systemd 为 `TimeoutStopSec=150s`，OpenRC 为 `retry="TERM/150/KILL/5"`；也可以使用上面的安装器升级命令重新生成标准服务文件。重新生成前请保留已有的服务自定义设置。
 
+### 自定义程序目录（v1.13-yz.23 起）
+
+安装器支持 `--bin-dir /绝对路径`，同时放置 `xboard-node` 和 `xbctl`。首次安装时在原有安装参数中增加该选项；未指定时，新安装继续使用 `/usr/local/bin`，已有安装沿用保存的目录。
+
+取得对应版本的安装器后，已有安装可以通过升级迁移到其他目录，例如：
+
+```bash
+sudo bash ./install.sh upgrade --bin-dir /boot/xboard-node --version v1.13-yz.23
+sudo xbctl config bin-dir
+```
+
+迁移会更新服务启动路径和 `xbctl` 管理入口，验证新服务后才删除原目录中的两个程序。配置、凭据和安装记录继续保存在 `/etc/xboard-node`，OpenRC 日志继续写入 `/var/log/xboard-node.log`。安装目录记录在 `/etc/xboard-node/bin-dir`，绑定变更和元数据刷新不会重置它。
+
+后续 `xbctl upgrade --version <固定版本>` 自动使用保存的目录，无需重复传入路径；`xbctl uninstall` 和安装器卸载也读取同一记录，仅删除对应程序，不删除用户选择的目录或其中的其他文件。
+
+程序目录必须是可执行、持久化的本地目录，所在文件系统需支持硬链接。路径支持字母、数字和 `/._-`，不能包含空格、特殊字符、重复的中间斜线或 `.`、`..` 路径段。systemd 会等待该目录挂载，OpenRC 会等待本地分区挂载。
+
+升级临时文件直接写到程序分区；旧程序使用硬链接保留，正常升级峰值约为两套程序大小，不再额外复制第三套。下载、校验、替换或启动失败会清理本次临时文件并按阶段恢复原安装；恢复失败则保留恢复文件并报告位置。旧版遗留的 `.new`、`.bak` 文件不自动清理。
+
+自定义目录下不能直接降级到不支持该功能的旧版 `xbctl`。需要降级时，使用支持此选项的安装器先迁回 `/usr/local/bin`；强制结束安装进程后，应先检查遗留锁和恢复文件，再进行下一次安装。实现与验证范围见 [自定义安装目录说明](docs/custom-install-directory.md)。
+
 ## xbctl
 
 Run `xbctl` after installation for help. Common commands:
