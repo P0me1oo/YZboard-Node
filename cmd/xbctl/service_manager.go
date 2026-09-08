@@ -174,6 +174,14 @@ func normalizeOpenRCState(output string, err error) string {
 }
 
 func serviceDefinitionFor(manager serviceManager) (string, []byte, os.FileMode, error) {
+	paths, err := loadInstallPaths(defaultBinDirFile)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	return serviceDefinitionForPaths(manager, paths)
+}
+
+func serviceDefinitionForPaths(manager serviceManager, paths installPaths) (string, []byte, os.FileMode, error) {
 	switch manager {
 	case serviceManagerSystemd:
 		unit := fmt.Sprintf(`[Unit]
@@ -181,6 +189,7 @@ Description=Xboard Node Backend
 Documentation=https://github.com/P0me1oo/YZboard-Node
 After=network-online.target
 Wants=network-online.target
+RequiresMountsFor=%s
 
 [Service]
 Type=simple
@@ -197,7 +206,7 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-`, defaultInstallRoot, defaultCredentialsPath, defaultBinaryPath, defaultConfigPath)
+`, paths.binDir, defaultInstallRoot, defaultCredentialsPath, paths.binary(), defaultConfigPath)
 		return systemdServiceFilePath, []byte(unit), 0o644, nil
 	case serviceManagerOpenRC:
 		script := fmt.Sprintf(`#!/sbin/openrc-run
@@ -218,7 +227,7 @@ no_new_privs=true
 rc_ulimit="-n 1048576"
 
 depend() {
-    need net
+    need net localmount
 }
 
 start_pre() {
@@ -245,7 +254,7 @@ start_pre() {
     fi
     checkpath -f -m 0640 -o root:root "%s"
 }
-`, defaultBinaryPath, defaultConfigPath, defaultInstallRoot, serviceName, openRCLogPath, openRCLogPath,
+`, paths.binary(), defaultConfigPath, defaultInstallRoot, serviceName, openRCLogPath, openRCLogPath,
 			defaultCredentialsPath, defaultCredentialsPath, openRCLogPath)
 		return openRCServiceFilePath, []byte(script), 0o755, nil
 	default:
