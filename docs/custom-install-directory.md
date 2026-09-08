@@ -46,3 +46,7 @@ bash tests/install_paths_test.sh
 `xbctl` 的 `linux/amd64` 与 `linux/arm64` 交叉编译均通过，使用 `CGO_ENABLED=0`、`-mod=readonly`、`-trimpath` 和 `-buildvcs=true`。构建版本参数为 `v1.13-yz.23-dev`；两份产物的构建信息均确认来源为上述修改基线、`vcs.modified=true`，对应未提交工作区。模块解析未新增依赖；这些临时产物仅用于构建检查，检查后清理，不作为正式发布。
 
 本地检查不能替代真实 Linux 服务启动、机器重启及正式发布构建的验证；正式 CI 已接入新增安装器测试。正式发布后在本节记录固定来源与产物验证结果。本次未进行生产迁移。
+
+## 发布前 Linux 检查
+
+发布前 Linux CI 发现同目录升级收到终止信号时重复执行回滚。[失败场景日志](https://github.com/P0me1oo/YZboard-Node/actions/runs/34268427384) 确认：信号处理已恢复旧文件，随后 Bash 又触发 `ERR`，再次恢复时删除了已经归位的程序。错误和信号处理入口现均关闭 `ERR` 回调，原有中断用例继续保留；Linux 全量复验结果在正式发布后补充。

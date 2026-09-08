@@ -205,6 +205,7 @@ rollback_install() {
 on_error() {
     local exit_code=$?
     local line_no=${1:-unknown}
+    trap - ERR
     trap '' INT TERM
     if [ "$exit_code" -ne 0 ]; then
         log_error "Install failed at line ${line_no} (exit=${exit_code})"
@@ -218,6 +219,8 @@ on_error() {
 
 on_signal() {
     local exit_code="$1"
+    # Linux Bash 的信号退出可能继续触发 ERR，必须阻止恢复流程再次执行。
+    trap - ERR
     trap '' INT TERM
     if [ -n "$BACKUP_PATH" ] && [ "$INSTALL_COMMITTED" -eq 0 ]; then
         rollback_install || true
