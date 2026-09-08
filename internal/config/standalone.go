@@ -16,8 +16,9 @@ type StandaloneNodeConfig struct {
 	Protocol string `yaml:"protocol"`
 	ListenIP string `yaml:"listen_ip,omitempty"`
 
-	ServerPort int    `yaml:"server_port"`
-	Network    string `yaml:"network,omitempty"`
+	ServerPort  int    `yaml:"server_port"`
+	PortHopping string `yaml:"port_hopping,omitempty"`
+	Network     string `yaml:"network,omitempty"`
 
 	NetworkSettings  map[string]any              `yaml:"network_settings,omitempty"`
 	Routes           []StandaloneRouteRule       `yaml:"routes,omitempty"`

@@ -89,6 +89,7 @@ type NodeConfig struct {
 	Protocol        string                 `json:"protocol"`
 	ListenIP        string                 `json:"listen_ip"`
 	ServerPort      int                    `json:"server_port"`
+	PortHopping     string                 `json:"port_hopping,omitempty"`
 	Network         string                 `json:"network"`
 	NetworkSettings map[string]interface{} `json:"networkSettings"`
 	BaseConfig      BaseConfig             `json:"base_config"`

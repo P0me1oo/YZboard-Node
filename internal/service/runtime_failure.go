@@ -37,7 +37,7 @@ func (s *Service) failRuntime(operation string, nc *model.NodeSpec, users []mode
 		logger = nlog.ForNode(nc.Protocol, nc.ServerPort)
 	}
 	logger.Error(operation+"，内核已停止", "kernel", s.kernel.Name(), "error", err)
-	s.kernel.Stop()
+	s.stopKernel()
 	timesync.Default().SetUsage(s.timeConsumer, false)
 	s.appliedState.Config = nil
 	s.appliedState.Users = nil

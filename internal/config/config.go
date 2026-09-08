@@ -28,6 +28,7 @@ type Config struct {
 	Runtime    RuntimeConfig  `yaml:"runtime"`
 	WS         WSConfig       `yaml:"ws"`
 	TimeSync   TimeSyncConfig `yaml:"time_sync"`
+	Firewall   FirewallConfig `yaml:"firewall,omitempty"`
 	// Standalone enables a local-only node that never contacts the panel.
 	Standalone *StandaloneConfig `yaml:"standalone,omitempty"`
 	// HealthPort enables a lightweight HTTP health-check endpoint on the
@@ -431,6 +432,11 @@ func (rc *RootConfig) resolveEnvRefs() {
 }
 
 func (rc *RootConfig) setDefaultsFrom(baseDir string) {
+	// 防火墙状态按配置文件共享，不能放进各实例的内核目录。
+	rc.Config.Firewall.setDefaults(baseDir)
+	for i := range rc.Instances {
+		rc.Instances[i].Firewall.setDefaults(baseDir)
+	}
 	if len(rc.Instances) == 0 {
 		rc.Config.setDefaultsFrom(baseDir)
 		return
@@ -665,6 +671,7 @@ func (c *Config) inheritFrom(parent *Config) {
 	// 时间校准由进程共享，但各实例仍先按顶层默认配置完成继承，
 	// 随后再由启动布局校验保证最终配置一致。
 	c.TimeSync.inheritFrom(parent.TimeSync)
+	c.Firewall.inheritFrom(parent.Firewall)
 	// Kernel (NOT config_dir — each instance needs unique dir)
 	if c.Kernel.Type == "" {
 		c.Kernel.Type = parent.Kernel.Type
@@ -728,6 +735,7 @@ func (c *Config) inheritFrom(parent *Config) {
 }
 
 func (c *Config) setDefaultsFrom(baseDir string) {
+	c.Firewall.setDefaults(baseDir)
 	if c.Kernel.Type == "" {
 		c.Kernel.Type = "xray"
 	}
@@ -866,6 +874,9 @@ func normalizeBaseURL(raw string) (string, string, error) {
 }
 
 func (c *Config) validate() error {
+	if err := ValidateFirewall(c.Firewall); err != nil {
+		return err
+	}
 	if c.IsStandalone() {
 		if err := c.validateStandalone(); err != nil {
 			return err
@@ -1050,11 +1061,18 @@ func ValidateStartupLayout(instances []*Config) error {
 	nodeBindings := make(map[string]string)
 	var processTimeSync *TimeSyncConfig
 	var processTimeSyncOwner string
+	var processFirewall *FirewallConfig
 	for _, instance := range instances {
 		if instance == nil {
 			continue
 		}
 		owner := instance.InstanceID
+		if processFirewall == nil {
+			cfg := instance.Firewall
+			processFirewall = &cfg
+		} else if !instance.Firewall.Equal(*processFirewall) {
+			return fmt.Errorf("同一进程的实例必须使用相同的 firewall 配置")
+		}
 		if processTimeSync == nil {
 			cfg := instance.TimeSync
 			processTimeSync = &cfg

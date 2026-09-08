@@ -16,6 +16,7 @@ import (
 
 	"github.com/cedar2025/xboard-node/internal/buildinfo"
 	"github.com/cedar2025/xboard-node/internal/config"
+	"github.com/cedar2025/xboard-node/internal/firewall"
 	"github.com/cedar2025/xboard-node/internal/machine"
 	"github.com/cedar2025/xboard-node/internal/nlog"
 	"github.com/cedar2025/xboard-node/internal/service"
@@ -127,6 +128,18 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 			os.Exit(1)
 		}
 		timeManager := timesync.New(instances[0].TimeSync)
+		firewallManager, err := firewall.New(instances[0].Firewall, configPath)
+		if err != nil {
+			nlog.Core().Error("防火墙管理器初始化失败", "error", err)
+			os.Exit(1)
+		}
+		firewallManager.Start(ctx)
+		stopShared := func() {
+			timeManager.Stop()
+			if err := firewallManager.Close(); err != nil {
+				nlog.Core().Error("防火墙规则未完全清理，已保留恢复记录", "error", err)
+			}
+		}
 		timesync.SetDefault(timeManager)
 		health.setClock(timeManager)
 		timeManager.Start(ctx)
@@ -161,6 +174,7 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 				if instanceCfg.IsMachineMode() {
 					nlog.Core().Info("starting machine instance", "instance", instanceCfg.InstanceID, "machine_id", instanceCfg.Machine.MachineID, "panel_url", instanceCfg.Panel.URL)
 					orch := machine.New(instanceCfg)
+					orch.SetFirewallController(firewallManager)
 					orch.SetStatusHandler(func(status service.RuntimeStatus) {
 						health.set(healthIDs[0], status)
 					})
@@ -191,6 +205,7 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 							}
 						}
 						svc := service.New(nodeCfg)
+						svc.SetFirewallController(firewallManager)
 						svc.SetStatusHandler(func(status service.RuntimeStatus) {
 							health.set(healthID, status)
 						})
@@ -216,7 +231,7 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 				if watcher != nil {
 					watcher.Stop()
 				}
-				timeManager.Stop()
+				stopShared()
 				return
 			}
 		case sig := <-sigCh:
@@ -226,7 +241,7 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 			if watcher != nil {
 				watcher.Stop()
 			}
-			timeManager.Stop()
+			stopShared()
 			return
 		case <-doneCh:
 		}
@@ -235,7 +250,7 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 		if watcher != nil {
 			watcher.Stop()
 		}
-		timeManager.Stop()
+		stopShared()
 
 		if newRoot == nil {
 			close(errCh)

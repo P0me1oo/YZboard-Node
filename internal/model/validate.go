@@ -5,11 +5,20 @@ import (
 	"strings"
 
 	"github.com/cedar2025/xboard-node/internal/config"
+	"github.com/cedar2025/xboard-node/internal/portset"
 )
 
 func ValidateNodeSpec(n *NodeSpec, kcfg config.KernelConfig) error {
 	if n == nil {
 		return nil
+	}
+	if strings.TrimSpace(n.PortHopping) != "" {
+		if n.Protocol != "hysteria" || n.Version != 2 || n.IsRelayLanding() {
+			return fmt.Errorf("端口跳跃只支持 Hysteria2 普通节点或中转入口")
+		}
+		if _, err := portset.Parse(n.PortHopping); err != nil {
+			return fmt.Errorf("port_hopping: %w", err)
+		}
 	}
 
 	effectiveKernelType := strings.TrimSpace(kcfg.Type)
