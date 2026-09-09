@@ -56,6 +56,7 @@ type fileRootConfig struct {
 	Runtime   *fileRuntimeConfig     `yaml:"runtime,omitempty"`
 	Cert      *config.CertConfig     `yaml:"cert,omitempty"`
 	TimeSync  *config.TimeSyncConfig `yaml:"time_sync,omitempty"`
+	Firewall  *config.FirewallConfig `yaml:"firewall,omitempty"`
 	Instances []fileInstance         `yaml:"instances,omitempty"`
 }
 
@@ -72,6 +73,7 @@ type fileInstance struct {
 	Cert       *config.CertConfig     `yaml:"cert,omitempty"`
 	WS         *config.WSConfig       `yaml:"ws,omitempty"`
 	TimeSync   *config.TimeSyncConfig `yaml:"time_sync,omitempty"`
+	Firewall   *config.FirewallConfig `yaml:"firewall,omitempty"`
 	Nodes      []config.NodeEntry     `yaml:"nodes,omitempty"`
 }
 
@@ -982,6 +984,9 @@ func writeRootConfig(path string, root *config.RootConfig) error {
 	if hasTimeSyncConfig(p.TimeSync) {
 		out.TimeSync = &p.TimeSync
 	}
+	if hasFirewallConfig(p.Firewall) {
+		out.Firewall = &p.Firewall
+	}
 
 	for _, inst := range instances {
 		fi := fileInstance{
@@ -1039,6 +1044,9 @@ func writeRootConfig(path string, root *config.RootConfig) error {
 		if hasTimeSyncConfig(inst.TimeSync) {
 			fi.TimeSync = &inst.TimeSync
 		}
+		if hasFirewallConfig(inst.Firewall) {
+			fi.Firewall = &inst.Firewall
+		}
 		if len(inst.Nodes) > 0 {
 			fi.Nodes = inst.Nodes
 		}
@@ -1054,6 +1062,10 @@ func writeRootConfig(path string, root *config.RootConfig) error {
 func hasTimeSyncConfig(cfg config.TimeSyncConfig) bool {
 	return cfg.Enabled != nil || len(cfg.Servers) > 0 || cfg.Interval != 0 || cfg.Timeout != 0 ||
 		cfg.WarnOffset != 0 || cfg.ErrorOffset != 0 || cfg.CriticalOffset != 0
+}
+
+func hasFirewallConfig(cfg config.FirewallConfig) bool {
+	return cfg.Enabled != nil || cfg.Backend != "" || cfg.RedirectBackend != "" || cfg.Zone != "" || cfg.StateDir != ""
 }
 
 func pruneCredentialKeys(path string, removed []config.Config) error {

@@ -59,6 +59,7 @@ func NodeSpecFromStandalone(cfg *config.Config) *NodeSpec {
 		Protocol:            sc.Node.Protocol,
 		ListenIP:            sc.Node.ListenIP,
 		ServerPort:          sc.Node.ServerPort,
+		PortHopping:         sc.Node.PortHopping,
 		Network:             sc.Node.Network,
 		NetworkSettings:     cloneAnyMap(sc.Node.NetworkSettings),
 		Routes:              routes,

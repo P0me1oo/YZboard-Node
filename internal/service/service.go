@@ -20,6 +20,7 @@ import (
 	"github.com/cedar2025/xboard-node/internal/cert/dnsproviders"
 	"github.com/cedar2025/xboard-node/internal/config"
 	"github.com/cedar2025/xboard-node/internal/controlplane"
+	"github.com/cedar2025/xboard-node/internal/firewall"
 	"github.com/cedar2025/xboard-node/internal/kernel"
 	"github.com/cedar2025/xboard-node/internal/kernel/singbox"
 	"github.com/cedar2025/xboard-node/internal/kernel/xray"
@@ -36,6 +37,7 @@ type Service struct {
 	source       controlplane.Source
 	sink         controlplane.Sink
 	kernel       kernel.Kernel
+	firewall     firewall.Controller
 	tracker      *tracker.Tracker
 	limiter      *limiter.Limiter
 	speedTracker *limiter.SpeedTracker
@@ -239,12 +241,12 @@ func (s *Service) Run(ctx context.Context) (runErr error) {
 
 	// 证书与节点配置一起应用，失败时保留控制通道接收修正。
 	defer s.cert.Stop()
+	defer s.stopKernel()
 
 	// Handshake: get WS config + initial data in one call
 	if err := s.initialSetup(ctx); err != nil {
 		return fmt.Errorf("initial setup: %w", err)
 	}
-	defer s.kernel.Stop()
 
 	// Set up tickers
 	trackTicker := time.NewTicker(time.Duration(s.cfg.Node.TrackInterval) * time.Second)
@@ -275,7 +277,7 @@ func (s *Service) Run(ctx context.Context) (runErr error) {
 	for {
 		select {
 		case <-ctx.Done():
-			s.kernel.Stop()
+			s.stopKernel()
 			s.pushReportSync()
 			return nil
 
@@ -802,6 +804,9 @@ func (s *Service) startKernel(ctx context.Context, nc *model.NodeSpec, users []m
 		s.failRuntime("启动内核失败", nc, users, err)
 		return false
 	}
+	if !s.applyFirewall(ctx, nc, users) {
+		return false
+	}
 
 	s.runtimeApplied(nc, users)
 
@@ -1012,7 +1017,7 @@ func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged 
 		return false
 	}
 	if len(s.lastUsers) == 0 && !isLanding {
-		s.kernel.Stop()
+		s.stopKernel()
 		s.runtimeApplied(nil, nil)
 		return true
 	}
@@ -1023,6 +1028,9 @@ func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged 
 		s.failRuntime("重载内核失败", s.lastConfig, s.lastUsers, err)
 		return false
 	}
+	if !s.applyFirewall(ctx, s.lastConfig, s.lastUsers) {
+		return false
+	}
 	s.runtimeApplied(s.lastConfig, s.lastUsers)
 	if s.nodeLog != nil {
 		s.nodeLog.Info(fmt.Sprintf("config updated, %d users", len(s.lastUsers)))
@@ -1031,6 +1039,9 @@ func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged 
 }
 
 func (s *Service) trackAndEnforce(ctx context.Context) {
+	if s.appliedState.Config != nil && !s.kernel.IsRunning() {
+		s.failRuntime("内核意外停止", s.lastConfig, s.lastUsers, fmt.Errorf("内核已不在运行"))
+	}
 	connCount, userCount, err := s.collectTraffic(ctx)
 	if err != nil {
 		nlog.Core().Debug("get user traffic failed", "error", err)

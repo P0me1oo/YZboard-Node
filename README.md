@@ -11,6 +11,8 @@ Node backend for [YZboard](https://github.com/P0me1oo/YZboard). Supports `sing-b
 - User controls: speed limit, device limit, alive-IP tracking, hot update
 - Deploy modes: node mode, machine mode, standalone mode
 - Multi-instance: single process binding multiple panels / nodes
+- 自动防火墙：Linux 上按节点运行状态管理 UFW/firewalld 端口，保留手工规则和共享端口引用
+- HY2 端口跳跃：由 Node 管理 nftables/iptables 转发，支持端口列表、范围及其组合；见 [配置说明](docs/firewall-port-hopping.md)
 - 中转：Xray、sing-box 均可作为 VLESS/Hysteria2 入口或 Shadowsocks/VLESS 落地，两种内核可以混用；VLESS Encryption 仅用于两端都是 Xray 的链路
 - HY2 ECH：`yz.22` 配合面板 `1.12.0` 支持 ECH 前置入口，已验证 sing-box／Mihomo 客户端、中转混淆、密钥轮换和流量累计
 - Machine mode: each panel node can select Xray or sing-box independently; Xray is the default
@@ -114,6 +116,7 @@ Legacy single-panel config is fully compatible. Appending bindings auto-migrates
 
 ## Extensions
 
+- 自动防火墙和 HY2 端口跳跃：[docs/firewall-port-hopping.md](docs/firewall-port-hopping.md)
 - Xray REALITY 最低客户端版本: [docs-xray-reality.md](docs-xray-reality.md)
 - VLESS/HY2 前置入口与中转落地：[docs-relay.md](docs-relay.md)
 - HY2 ECH 握手、中转与构建验证：[docs/hy2-ech-validation.md](docs/hy2-ech-validation.md)

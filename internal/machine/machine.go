@@ -12,6 +12,7 @@ import (
 
 	"github.com/cedar2025/xboard-node/internal/config"
 	"github.com/cedar2025/xboard-node/internal/controlplane"
+	"github.com/cedar2025/xboard-node/internal/firewall"
 	"github.com/cedar2025/xboard-node/internal/model"
 	"github.com/cedar2025/xboard-node/internal/monitor"
 	"github.com/cedar2025/xboard-node/internal/nlog"
@@ -34,8 +35,9 @@ type nodeHandle struct {
 //   - maintains a shared WS connection that demuxes events by node_id
 //   - reports machine-level load via POST /machine/status
 type Orchestrator struct {
-	cfg    *config.Config
-	client *panel.Client // machine-level client (no node_id)
+	cfg      *config.Config
+	firewall firewall.Controller
+	client   *panel.Client // machine-level client (no node_id)
 
 	mu    sync.Mutex
 	nodes map[int]*nodeHandle // node_id → handle
@@ -83,6 +85,8 @@ func New(cfg *config.Config) *Orchestrator {
 func (o *Orchestrator) SetStatusHandler(handler func(service.RuntimeStatus)) {
 	o.statusHandler = handler
 }
+
+func (o *Orchestrator) SetFirewallController(controller firewall.Controller) { o.firewall = controller }
 
 func (o *Orchestrator) notifyStatus(status service.RuntimeStatus) {
 	if o.statusHandler != nil {
@@ -266,6 +270,7 @@ func (o *Orchestrator) startNode(ctx context.Context, mn panel.MachineNode) {
 
 	cp := controlplane.NewMachinePanelControlPlane(perNodeClient, push, registerFn)
 	svc := service.NewWithControlPlane(nodeCfg, cp)
+	svc.SetFirewallController(o.firewall)
 	svc.SetStatusHandler(func(status service.RuntimeStatus) {
 		o.setNodeStatus(mn.ID, status)
 	})

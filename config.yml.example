@@ -23,6 +23,12 @@
 #   warn_offset: 5                # 偏移达到 5 秒时告警
 #   error_offset: 15              # 偏移达到 15 秒时标记错误
 #   critical_offset: 25           # 偏移达到 25 秒时标记严重错误
+# firewall:
+#   enabled: true                 # Linux 上按节点实际运行状态管理端口
+#   backend: auto                 # auto / ufw / firewalld / none
+#   redirect_backend: auto        # auto / nftables / iptables，用于 HY2 跳跃
+#   zone: ""                      # firewalld 留空使用活动区域和默认区域
+#   state_dir: "firewall"          # 相对配置文件目录，同进程实例必须共用
 # instances:
 #   - panel:
 #       url: "https://panel.example.com"
