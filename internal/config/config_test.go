@@ -65,8 +65,8 @@ panel:
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Kernel.Type != "singbox" {
-		t.Errorf("default kernel.type: got %q, want singbox", cfg.Kernel.Type)
+	if cfg.Kernel.Type != "xray" {
+		t.Errorf("default kernel.type: got %q, want xray", cfg.Kernel.Type)
 	}
 	// config_dir should default to the directory containing the config file.
 	expectedDir := filepath.Dir(path)
@@ -327,7 +327,6 @@ kernel:
 	}
 }
 
-
 func TestLoadRoot_LegacyConfigNormalizesToSingleInstance(t *testing.T) {
 	path := writeTemp(t, `
 panel:
@@ -541,5 +540,213 @@ func TestInheritFrom_AutoTLSInheritedWhenChildHasNoCertConfig(t *testing.T) {
 	child.inheritFrom(parent)
 	if !child.Cert.AutoTLS {
 		t.Error("auto_tls should be inherited when child has no cert config")
+	}
+}
+
+func TestLoad_RealityMinClientVerDefault(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://panel.example.com"
+  token: "secret-token"
+  node_id: 1
+kernel:
+  type: xray
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Kernel.RealityMinClientVer != DefaultRealityMinClientVer {
+		t.Errorf("reality_min_client_ver: got %q, want %q", cfg.Kernel.RealityMinClientVer, DefaultRealityMinClientVer)
+	}
+	if got := cfg.Kernel.RealityMinClientVersion(); got != DefaultRealityMinClientVer {
+		t.Errorf("RealityMinClientVersion(): got %q, want %q", got, DefaultRealityMinClientVer)
+	}
+}
+
+func TestLoad_RealityMinClientVerOverride(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://panel.example.com"
+  token: "secret-token"
+  node_id: 1
+kernel:
+  type: xray
+  reality_min_client_ver: "26.3.27"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Kernel.RealityMinClientVersion(); got != "26.3.27" {
+		t.Errorf("RealityMinClientVersion(): got %q, want %q", got, "26.3.27")
+	}
+}
+
+func TestLoad_RealityMinClientVerInvalid(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://panel.example.com"
+  token: "secret-token"
+  node_id: 1
+kernel:
+  type: xray
+  reality_min_client_ver: "1.2"
+`)
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load should reject a two-segment reality_min_client_ver")
+	}
+}
+
+func TestValidateRealityMinClientVer(t *testing.T) {
+	valid := []string{"0.0.0", "1.8.4", "26.3.27", "255.255.255"}
+	for _, v := range valid {
+		if err := ValidateRealityMinClientVer(v); err != nil {
+			t.Errorf("ValidateRealityMinClientVer(%q) = %v, want nil", v, err)
+		}
+	}
+	invalid := []string{"", "1", "1.2", "1.2.3.4", "1.2.x", "1.2.256", "-1.0.0", "v1.2.3", "1.2.3 "}
+	for _, v := range invalid {
+		if err := ValidateRealityMinClientVer(v); err == nil {
+			t.Errorf("ValidateRealityMinClientVer(%q) = nil, want error", v)
+		}
+	}
+}
+
+func TestRealityMinClientVersion_FallbackForUnvalidatedConfig(t *testing.T) {
+	// Configs built in code never pass through Load; the resolver must still
+	// produce a usable value instead of leaking a malformed one into xray.
+	cases := map[string]string{
+		"":        DefaultRealityMinClientVer,
+		"   ":     DefaultRealityMinClientVer,
+		"broken":  DefaultRealityMinClientVer,
+		"1.2.3.4": DefaultRealityMinClientVer,
+		" 1.8.4 ": "1.8.4",
+		"26.3.27": "26.3.27",
+	}
+	for in, want := range cases {
+		k := KernelConfig{RealityMinClientVer: in}
+		if got := k.RealityMinClientVersion(); got != want {
+			t.Errorf("RealityMinClientVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestInheritFrom_RealityMinClientVer(t *testing.T) {
+	parent := &Config{Kernel: KernelConfig{RealityMinClientVer: "1.8.4"}}
+	child := &Config{}
+	child.inheritFrom(parent)
+	if child.Kernel.RealityMinClientVer != "1.8.4" {
+		t.Errorf("inherited value: got %q, want %q", child.Kernel.RealityMinClientVer, "1.8.4")
+	}
+
+	explicit := &Config{Kernel: KernelConfig{RealityMinClientVer: "0.0.0"}}
+	explicit.inheritFrom(parent)
+	if explicit.Kernel.RealityMinClientVer != "0.0.0" {
+		t.Errorf("explicit value overwritten: got %q", explicit.Kernel.RealityMinClientVer)
+	}
+}
+
+func TestLoad_TimeSyncDefaults(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://panel.example.com"
+  token: "secret-token"
+  node_id: 1
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.TimeSync.IsEnabled() {
+		t.Fatal("time_sync.enabled = false, want default true")
+	}
+	if cfg.TimeSync.Interval != DefaultTimeSyncInterval || cfg.TimeSync.Timeout != DefaultTimeSyncTimeout {
+		t.Fatalf("time_sync interval/timeout = %d/%d", cfg.TimeSync.Interval, cfg.TimeSync.Timeout)
+	}
+	if cfg.TimeSync.WarnOffset != DefaultTimeSyncWarnOffset ||
+		cfg.TimeSync.ErrorOffset != DefaultTimeSyncErrorOffset ||
+		cfg.TimeSync.CriticalOffset != DefaultTimeSyncCriticalOffset {
+		t.Fatalf("time_sync thresholds = %d/%d/%d",
+			cfg.TimeSync.WarnOffset,
+			cfg.TimeSync.ErrorOffset,
+			cfg.TimeSync.CriticalOffset,
+		)
+	}
+	if len(cfg.TimeSync.Servers) != len(DefaultTimeSyncServers) {
+		t.Fatalf("time_sync servers = %v", cfg.TimeSync.Servers)
+	}
+}
+
+func TestLoadRoot_TimeSyncInheritance(t *testing.T) {
+	path := writeTemp(t, `
+time_sync:
+  enabled: false
+  servers:
+    - ntp.example.com
+  interval: 120
+  timeout: 4
+  warn_offset: 6
+  error_offset: 16
+  critical_offset: 26
+instances:
+  - panel:
+      url: "https://panel.example.com"
+      token: "tok-a"
+      node_id: 1
+  - panel:
+      url: "https://panel.example.com"
+      token: "tok-b"
+      node_id: 2
+`)
+	root, err := LoadRoot(path)
+	if err != nil {
+		t.Fatalf("LoadRoot: %v", err)
+	}
+	for i, instance := range root.Instances {
+		if instance.TimeSync.IsEnabled() {
+			t.Fatalf("instances[%d] time sync should be disabled", i)
+		}
+		if instance.TimeSync.Interval != 120 || instance.TimeSync.Servers[0] != "ntp.example.com" {
+			t.Fatalf("instances[%d] time sync = %+v", i, instance.TimeSync)
+		}
+	}
+}
+
+func TestLoad_TimeSyncRejectsInvalidThresholdOrder(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://panel.example.com"
+  token: "secret-token"
+  node_id: 1
+time_sync:
+  warn_offset: 20
+  error_offset: 10
+  critical_offset: 25
+`)
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() error = nil, want invalid threshold order")
+	}
+}
+
+func TestValidateStartupLayoutRejectsDifferentTimeSync(t *testing.T) {
+	enabled := true
+	a := &Config{
+		InstanceID: "a",
+		TimeSync: TimeSyncConfig{
+			Enabled:        &enabled,
+			Servers:        []string{"time-a.example"},
+			Interval:       600,
+			Timeout:        3,
+			WarnOffset:     5,
+			ErrorOffset:    15,
+			CriticalOffset: 25,
+		},
+	}
+	b := *a
+	b.InstanceID = "b"
+	b.TimeSync.Servers = []string{"time-b.example"}
+	if err := ValidateStartupLayout([]*Config{a, &b}); err == nil {
+		t.Fatal("ValidateStartupLayout() error = nil, want time_sync conflict")
 	}
 }

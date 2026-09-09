@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +27,7 @@ import (
 	"github.com/cedar2025/xboard-node/internal/model"
 	"github.com/cedar2025/xboard-node/internal/monitor"
 	"github.com/cedar2025/xboard-node/internal/nlog"
+	"github.com/cedar2025/xboard-node/internal/timesync"
 	"github.com/cedar2025/xboard-node/internal/tracker"
 )
 
@@ -38,8 +41,12 @@ type Service struct {
 	speedTracker *limiter.SpeedTracker
 	cert         *cert.Manager
 
+	// 保存面板最新要求的状态；实际成功运行的状态单独记录在 appliedState。
 	lastConfig *model.NodeSpec
 	lastUsers  []model.UserSpec
+	// 同一份失败配置只尝试一次，配置变化或重新创建 Service 后才允许再启动。
+	failedRuntimeHash string
+	runtimeError      error
 
 	// nodeLog is the logger with node context for this service instance.
 	nodeLog *nlog.NodeLog
@@ -62,6 +69,10 @@ type Service struct {
 	// pushActive prevents overlapping push/pull goroutines.
 	pushActive atomic.Bool
 	pullActive atomic.Bool
+	// 关闭时先禁止新报告，再等待已登记的后台报告，避免批次相互覆盖。
+	pushMu      sync.Mutex
+	pushClosing bool
+	pushWG      sync.WaitGroup
 	// pullResults delivers async pullViaAPI results back to the main goroutine.
 	pullResults chan pullResult
 
@@ -76,7 +87,27 @@ type Service struct {
 
 	// metricsMu: lastUsers, lastConfig, wsClient, wsDisconnectAt (buildMetrics vs main loop).
 	metricsMu sync.RWMutex
+
+	// reportMu 保护失败的报告批次。HTTP 请求可能已到达面板后才断开连接；
+	// 保留完整批次和 report ID，可让面板丢弃重试而不丢失请求期间产生的新流量。
+	reportMu     sync.Mutex
+	retryReport  *reportBatch
+	reportBoot   string
+	reportSeq    atomic.Uint64
+	status       func(RuntimeStatus)
+	timeConsumer string
+	// certRenewed 默认读取证书管理器；测试可替换以验证轮询失败语义。
+	certRenewed func() bool
 }
+
+type RuntimeStatus string
+
+const (
+	RuntimeStarting RuntimeStatus = "starting"
+	RuntimeRunning  RuntimeStatus = "running"
+	RuntimeFailed   RuntimeStatus = "failed"
+	RuntimeStopped  RuntimeStatus = "stopped"
+)
 
 // pullResult carries the outcome of an async pullViaAPI back to the main goroutine.
 type pullResult struct {
@@ -85,6 +116,11 @@ type pullResult struct {
 	configHash  string
 	userHash    string
 	certChanged bool
+}
+
+type reportBatch struct {
+	id      string
+	payload controlplane.ReportPayload
 }
 
 // apiBackoff implements simple exponential backoff for API failures.
@@ -124,7 +160,7 @@ func New(cfg *config.Config) *Service {
 	if cfg.IsStandalone() {
 		cp = controlplane.NewLocalControlPlane(cfg)
 	} else {
-		cp = controlplane.NewPanelControlPlane(cfg.Panel, cfg.WS, cfg.Kernel)
+		cp = controlplane.NewPanelControlPlane(cfg.Panel, cfg.WS)
 	}
 	return newService(cfg, cp)
 }
@@ -134,6 +170,17 @@ func New(cfg *config.Config) *Service {
 // MachinePanelControlPlane with WS mux routing.
 func NewWithControlPlane(cfg *config.Config, cp controlplane.ControlPlane) *Service {
 	return newService(cfg, cp)
+}
+
+// SetStatusHandler registers a lifecycle observer before Run is called.
+func (s *Service) SetStatusHandler(handler func(RuntimeStatus)) {
+	s.status = handler
+}
+
+func (s *Service) notifyStatus(status RuntimeStatus) {
+	if s.status != nil {
+		s.status(status)
+	}
 }
 
 func newService(cfg *config.Config, cp controlplane.ControlPlane) *Service {
@@ -146,8 +193,8 @@ func newService(cfg *config.Config, cp controlplane.ControlPlane) *Service {
 	case "xray":
 		k = xray.New(cfg.Kernel)
 	default:
-		nlog.Core().Warn("unsupported kernel type, defaulting to sing-box", "type", cfg.Kernel.Type)
-		k = singbox.New(cfg.Kernel)
+		nlog.Core().Warn("unsupported kernel type, defaulting to Xray", "type", cfg.Kernel.Type)
+		k = xray.New(cfg.Kernel)
 	}
 
 	l := limiter.New()
@@ -165,14 +212,32 @@ func newService(cfg *config.Config, cp controlplane.ControlPlane) *Service {
 		wsEvents:     make(chan controlplane.Event, 16),
 		wsStatusCh:   make(chan controlplane.StatusChange, 4),
 		pullResults:  make(chan pullResult, 1),
+		reportBoot:   newReportBootID(),
+		timeConsumer: fmt.Sprintf("%s/node/%d", cfg.InstanceID, cfg.Panel.NodeID),
 	}
 }
 
-func (s *Service) Run(ctx context.Context) error {
-	// Start cert manager (handles auto-TLS or manual cert verification)
-	if err := s.cert.Start(ctx); err != nil {
-		return fmt.Errorf("cert manager: %w", err)
+func newReportBootID() string {
+	buf := make([]byte, 12)
+	if _, err := cryptorand.Read(buf); err == nil {
+		return hex.EncodeToString(buf)
 	}
+	// 该回退值只用于进程内重试流标识，不是认证值，仅在系统随机源不可用时使用。
+	return fmt.Sprintf("%x", time.Now().UnixNano())
+}
+
+func (s *Service) Run(ctx context.Context) (runErr error) {
+	s.notifyStatus(RuntimeStarting)
+	defer timesync.Default().SetUsage(s.timeConsumer, false)
+	defer func() {
+		if runErr != nil {
+			s.notifyStatus(RuntimeFailed)
+			return
+		}
+		s.notifyStatus(RuntimeStopped)
+	}()
+
+	// 证书与节点配置一起应用，失败时保留控制通道接收修正。
 	defer s.cert.Stop()
 
 	// Handshake: get WS config + initial data in one call
@@ -185,6 +250,8 @@ func (s *Service) Run(ctx context.Context) error {
 	trackTicker := time.NewTicker(time.Duration(s.cfg.Node.TrackInterval) * time.Second)
 	pushInterval := time.Duration(math.Max(float64(s.pushInterval), 5)) * time.Second
 	pullInterval := time.Duration(s.pullInterval) * time.Second
+	wsReconcileInterval := max(pullInterval, 5*time.Minute)
+	lastWSReconcile := time.Now()
 	reportTicker := time.NewTicker(pushInterval)
 	pullTicker := time.NewTicker(pullInterval)
 	deviceReportTicker := time.NewTicker(time.Duration(s.cfg.Node.DeviceReportInterval) * time.Second)
@@ -201,10 +268,14 @@ func (s *Service) Run(ctx context.Context) error {
 	defer wsDiscoveryTicker.Stop()
 
 	s.startWSClient(ctx)
+	if s.runtimeError == nil {
+		s.notifyStatus(RuntimeRunning)
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
+			s.kernel.Stop()
 			s.pushReportSync()
 			return nil
 
@@ -218,12 +289,15 @@ func (s *Service) Run(ctx context.Context) error {
 			s.reportDevices()
 
 		case <-pullTicker.C:
-			// When WebSocket is connected, skip REST polling entirely.
-			// Config/user updates arrive via WS push.
 			if s.wsClient != nil && s.wsClient.IsConnected() {
-				continue
+				if time.Since(lastWSReconcile) < wsReconcileInterval {
+					continue
+				}
+				lastWSReconcile = time.Now()
+				nlog.Core().Debug("periodic REST reconciliation (ws connected)")
+			} else {
+				nlog.Core().Debug("polling from API (ws not connected)")
 			}
-			nlog.Core().Debug("polling from API (ws not connected)")
 			s.pullViaAPIAsync(ctx)
 
 		case result := <-s.pullResults:
@@ -288,10 +362,6 @@ func (s *Service) initialSetup(ctx context.Context) error {
 		}
 		return fmt.Errorf("initial config is nil")
 	}
-	if err := validateNodeRuntime(s.cfg, s.kernel.Protocols(), bootstrap.Config, s.cert.TLSCert()); err != nil {
-		return err
-	}
-
 	s.metricsMu.Lock()
 	s.lastConfig = bootstrap.Config
 	s.metricsMu.Unlock()
@@ -304,25 +374,18 @@ func (s *Service) initialSetup(ctx context.Context) error {
 		"users", len(bootstrap.Users),
 	)
 
-	if len(bootstrap.Users) == 0 {
-		nlog.Core().Warn("no users, kernel will not start until users are available")
-		s.markMailboxReadyAndDrain(ctx)
-		return nil
-	}
-
-	s.applyRemoteOverrides(ctx, bootstrap.Config)
-	if !s.startKernel(bootstrap.Config, bootstrap.Users) {
-		return fmt.Errorf("start kernel")
-	}
+	// 应用失败由节点自身记录并停止内核；初始同步仍完成，继续等待面板修正。
+	s.applyChanges(ctx, true, false)
 	s.markMailboxReadyAndDrain(ctx)
 	return nil
 }
 
 // applyRemoteOverrides updates service-level settings (log level, cert config)
-// from the panel's NodeConfig. Returns true if cert paths changed (kernel restart needed).
-func (s *Service) applyRemoteOverrides(ctx context.Context, nc *model.NodeSpec) bool {
+// from the panel's NodeConfig. The bool reports whether cert paths changed;
+// an error means the remote setting was not applied and the runtime must stop.
+func (s *Service) applyRemoteOverrides(ctx context.Context, nc *model.NodeSpec) (bool, error) {
 	if nc == nil {
-		return false
+		return false, nil
 	}
 
 	// Dynamic Log Level (Kernel)
@@ -345,14 +408,14 @@ func (s *Service) applyRemoteOverrides(ctx context.Context, nc *model.NodeSpec) 
 		s.cfg.Cert.Domain = nc.Domain
 	}
 
-	return false
+	return false, nil
 }
 
 // applyPanelCert converts a panel CertConfig into the local config format and
 // reconfigures the cert manager. Reports whether cert paths changed.
-func (s *Service) applyNodeCert(ctx context.Context, newCfg *config.CertConfig) bool {
+func (s *Service) applyNodeCert(ctx context.Context, newCfg *config.CertConfig) (bool, error) {
 	if newCfg == nil {
-		return false
+		return false, nil
 	}
 	cfgCopy := *newCfg
 	cfgCopy.CertDir = s.cfg.Cert.CertDir
@@ -360,7 +423,7 @@ func (s *Service) applyNodeCert(ctx context.Context, newCfg *config.CertConfig) 
 	changed, err := s.cert.Reconfigure(ctx, cfgCopy)
 	if err != nil {
 		nlog.Core().Error("failed to apply runtime cert config", "mode", cfgCopy.CertMode, "error", err)
-		return false
+		return false, fmt.Errorf("runtime certificate configuration: %w", err)
 	}
 	s.cfg.Cert = cfgCopy
 	if changed {
@@ -371,7 +434,7 @@ func (s *Service) applyNodeCert(ctx context.Context, newCfg *config.CertConfig) 
 			nlog.Core().Info(msg)
 		}
 	}
-	return changed
+	return changed, nil
 }
 
 // startWSClient starts the push client goroutine if a client is configured.
@@ -543,21 +606,9 @@ func (s *Service) handleWSEvent(ctx context.Context, event controlplane.Event) {
 		if newConfigHash == s.lastConfigHash {
 			return
 		}
-		if err := validateNodeRuntime(s.cfg, s.kernel.Protocols(), event.Config, s.cert.TLSCert()); err != nil {
-			nlog.Core().Warn("ws config validation failed, ignoring update", "error", err)
-			return
+		if !s.applyConfigUpdate(ctx, event.Config, newConfigHash) {
+			s.resetPollingState()
 		}
-		// Initialize nodeLog on first config
-		if s.nodeLog == nil {
-			s.nodeLog = nlog.ForNode(event.Config.Protocol, event.Config.ServerPort)
-		}
-		s.nodeLog.Info(fmt.Sprintf("config updated, %d users", len(event.Users)))
-		s.metricsMu.Lock()
-		s.lastConfig = event.Config
-		s.metricsMu.Unlock()
-		s.lastConfigHash = newConfigHash
-		s.applyRemoteOverrides(ctx, event.Config)
-		s.applyChanges(ctx, true, false)
 
 	case controlplane.EventSyncUsers:
 		if event.Users == nil {
@@ -570,7 +621,9 @@ func (s *Service) handleWSEvent(ctx context.Context, event controlplane.Event) {
 		if s.nodeLog != nil {
 			s.nodeLog.Info(fmt.Sprintf("users updated, %d users", len(event.Users)))
 		}
-		s.applyUserUpdate(ctx, event.Users, newHash)
+		if !s.applyUserUpdate(ctx, event.Users, newHash) {
+			s.resetPollingState()
+		}
 
 	case controlplane.EventSyncUserDelta:
 		if len(event.DeltaUsers) == 0 {
@@ -579,7 +632,9 @@ func (s *Service) handleWSEvent(ctx context.Context, event controlplane.Event) {
 		if s.nodeLog != nil {
 			s.nodeLog.Info(fmt.Sprintf("users delta: %s, %d users", event.DeltaAction, len(event.DeltaUsers)))
 		}
-		s.applyUserDelta(ctx, event.DeltaAction, event.DeltaUsers)
+		if !s.applyUserDelta(ctx, event.DeltaAction, event.DeltaUsers) {
+			s.resetPollingState()
+		}
 
 	case controlplane.EventSyncDevices:
 		// Sync global device state
@@ -609,7 +664,6 @@ func (s *Service) pullViaAPIAsync(ctx context.Context) {
 	}
 
 	currentConfigHash := s.lastConfigHash
-	certChanged := s.cert.CertRenewed()
 
 	go func() {
 		defer s.pullActive.Store(false)
@@ -621,11 +675,17 @@ func (s *Service) pullViaAPIAsync(ctx context.Context) {
 		}
 		s.pullBackoff.onSuccess()
 
-		result := pullResult{certChanged: certChanged}
+		// 只有 REST 请求成功后才消费证书续期标记。请求失败时保留该标记，
+		// 让下一次对账仍能触发内核重载；请求期间新发生的续期也会被本次结果带上。
+		takeCertRenewal := s.certRenewed
+		if takeCertRenewal == nil {
+			takeCertRenewal = s.cert.CertRenewed
+		}
+		result := pullResult{certChanged: takeCertRenewal()}
 		if snapshot.Config != nil {
 			result.config = snapshot.Config
 			result.configHash = computeConfigHash(snapshot.Config)
-			if result.configHash == currentConfigHash && !certChanged {
+			if result.configHash == currentConfigHash && !result.certChanged {
 				result.config = nil
 			}
 		}
@@ -644,46 +704,38 @@ func (s *Service) pullViaAPIAsync(ctx context.Context) {
 // applyPullResult processes the result of an async pullViaAPI on the main goroutine.
 func (s *Service) applyPullResult(ctx context.Context, result pullResult) {
 	s.wsResyncPending.Store(false)
-	configChanged := false
+
+	needsReload := result.config != nil || result.certChanged
+	usersChanged := result.users != nil && result.userHash != s.lastUserHash
+	if !needsReload {
+		if usersChanged {
+			if !s.applyUserUpdate(ctx, result.users, result.userHash) {
+				s.resetPollingState()
+			}
+		}
+		return
+	}
 
 	if result.certChanged {
 		nlog.Core().Info("certificate renewed, kernel restart needed")
-		configChanged = true
 	}
 
+	if usersChanged {
+		s.prepareUserState(result.users)
+	}
+
+	applied := false
 	if result.config != nil {
-		if err := validateNodeRuntime(s.cfg, s.kernel.Protocols(), result.config, s.cert.TLSCert()); err != nil {
-			nlog.Core().Warn("runtime config validation failed", "error", err)
-			result.config = nil
-		} else {
-			configChanged = true
-			// Initialize or update node logger
-			if s.nodeLog == nil {
-				s.nodeLog = nlog.ForNode(result.config.Protocol, result.config.ServerPort)
-			}
-			s.nodeLog.Info(fmt.Sprintf("config updated, %d users", len(s.lastUsers)))
-			s.metricsMu.Lock()
-			s.lastConfig = result.config
-			s.metricsMu.Unlock()
-			s.lastConfigHash = result.configHash
-			if s.applyRemoteOverrides(ctx, result.config) {
-				configChanged = true
-			}
-		}
+		applied = s.applyConfigUpdate(ctx, result.config, result.configHash)
+	} else {
+		applied = s.applyChanges(ctx, true, false)
 	}
-
-	if result.users != nil {
-		usersChanged := result.userHash != s.lastUserHash
-
-		if usersChanged && !configChanged {
-			s.applyUserUpdate(ctx, result.users, result.userHash)
-		} else if usersChanged {
-			s.updateUserState(result.users)
-		}
+	if !applied {
+		s.resetPollingState()
+		return
 	}
-
-	if configChanged {
-		s.applyChanges(ctx, true, false)
+	if usersChanged {
+		s.lastUserHash = result.userHash
 	}
 }
 
@@ -693,51 +745,65 @@ func (s *Service) updateUserState(users []model.UserSpec) {
 	if users == nil {
 		users = []model.UserSpec{}
 	}
-	_, _ = s.prepareUserState(users)
+	s.prepareUserState(users)
 }
 
-func (s *Service) prepareUserState(users []model.UserSpec) (prevUsers []model.UserSpec, prevHash string) {
+func (s *Service) prepareUserState(users []model.UserSpec) {
 	if users == nil {
 		users = []model.UserSpec{}
 	}
-
-	s.metricsMu.RLock()
-	prevUsers = append([]model.UserSpec(nil), s.lastUsers...)
-	s.metricsMu.RUnlock()
-	prevHash = s.lastUserHash
 
 	s.limiter.UpdateUsers(users)
 	s.speedTracker.UpdateBuckets()
 
 	s.metricsMu.Lock()
-	s.lastUsers = append([]model.UserSpec(nil), users...)
+	s.lastUsers = append([]model.UserSpec{}, users...)
 	s.metricsMu.Unlock()
 	s.lastUserHash = computeUserHash(users)
-	return prevUsers, prevHash
 }
 
-func (s *Service) restoreUserState(users []model.UserSpec, hash string) {
-	if users == nil {
-		users = []model.UserSpec{}
-	}
-	s.limiter.UpdateUsers(users)
-	s.speedTracker.UpdateBuckets()
+// applyConfigUpdate 先把配置作为待应用状态交给内核。
+// 无论成功还是失败，lastConfig 都保留面板最新要求；失败时节点保持停止，
+// 这样后续用户同步不会误把旧配置重新启动起来。
+func (s *Service) applyConfigUpdate(ctx context.Context, config *model.NodeSpec, hash string) bool {
 	s.metricsMu.Lock()
-	s.lastUsers = append([]model.UserSpec(nil), users...)
+	s.lastConfig = config
 	s.metricsMu.Unlock()
-	s.lastUserHash = hash
-}
+	s.lastConfigHash = hash
 
-// startKernel starts (or restarts) the kernel with the given config/users and
-// records the successfully applied state. Returns false on error.
-func (s *Service) startKernel(nc *model.NodeSpec, users []model.UserSpec) bool {
-	if err := s.kernel.Start(nc, users, s.cert.TLSCert()); err != nil {
-		nlog.Core().Error("failed to start kernel", "error", err)
+	if !s.applyChanges(ctx, true, false) {
+		// 失败配置仍作为当前期望状态保留，避免任何后台路径拉起旧配置。
 		return false
 	}
 
-	s.appliedState.Config = nc
-	s.appliedState.Users = users
+	if s.nodeLog == nil {
+		s.nodeLog = nlog.ForNode(config.Protocol, config.ServerPort)
+	}
+	s.nodeLog.Info(fmt.Sprintf("config updated, %d users", len(s.lastUsers)))
+	return true
+}
+
+func (s *Service) setTimeUsage(config *model.NodeSpec) {
+	timesync.Default().SetUsage(s.timeConsumer, config != nil && config.UsesSS2022())
+}
+
+func (s *Service) resetPollingState() {
+	if resetter, ok := s.source.(controlplane.PollStateResetter); ok {
+		resetter.ResetPollingState()
+	}
+}
+
+// startKernel 对每次启动执行完整检查，包括由用户变化触发的故障恢复。
+func (s *Service) startKernel(ctx context.Context, nc *model.NodeSpec, users []model.UserSpec) bool {
+	if !s.prepareRuntime(ctx, nc, users) {
+		return false
+	}
+	if err := s.kernel.Start(nc, users, s.tlsCert()); err != nil {
+		s.failRuntime("启动内核失败", nc, users, err)
+		return false
+	}
+
+	s.runtimeApplied(nc, users)
 
 	// Initialize node logger on first successful start
 	if s.nodeLog == nil {
@@ -753,74 +819,83 @@ func (s *Service) startKernel(nc *model.NodeSpec, users []model.UserSpec) bool {
 
 // ensureRunning starts the kernel if it is not running and there are users +
 // config available. Returns true if the kernel is running afterwards.
-func (s *Service) ensureRunning() bool {
+func (s *Service) ensureRunning(ctx context.Context) bool {
 	if s.kernel.IsRunning() {
 		return true
 	}
-	if len(s.lastUsers) > 0 && s.lastConfig != nil {
-		return s.startKernel(s.lastConfig, s.lastUsers)
+	if s.lastConfig == nil || !s.applyChanges(ctx, true, false) {
+		return false
 	}
-	return false
+	return s.kernel.IsRunning()
 }
 
 // ─── User update entry points ───────────────────────────────────────────────
 
 // applyUserUpdate replaces the full user set and hot-swaps the kernel.
 // Called from WS sync.users and REST polling.
-func (s *Service) applyUserUpdate(ctx context.Context, users []model.UserSpec, newHash string) {
-	if !s.ensureRunning() {
-		return
+func (s *Service) applyUserUpdate(ctx context.Context, users []model.UserSpec, newHash string) bool {
+	// 先保存最新用户状态，再尝试启动内核。否则内核停止时
+	// ensureRunning 只能看到旧的空用户列表，会把首个用户更新丢掉。
+	wasRunning := s.kernel.IsRunning()
+	s.prepareUserState(users)
+	if !s.ensureRunning(ctx) {
+		// 没有用户时可以保持空闲；配置或证书仍错误时继续报告失败。
+		return s.runtimeError == nil
+	}
+	if !wasRunning {
+		if newHash != "" {
+			s.lastUserHash = newHash
+		}
+		return true
 	}
 
-	prevUsers, prevHash := s.prepareUserState(users)
 	added, removed, err := s.kernel.UpdateUsers(users)
 	if err != nil {
-		nlog.Core().Warn(fmt.Sprintf("UpdateUsers failed, restarting kernel: %v", err))
-		if !s.startKernel(s.lastConfig, users) {
-			s.restoreUserState(prevUsers, prevHash)
-		}
-		return
+		s.failRuntime("更新用户失败", s.lastConfig, users, err)
+		return false
 	}
+	s.appliedState.Users = s.lastUsers
 	if newHash != "" {
 		s.lastUserHash = newHash
 	}
 	if s.nodeLog != nil && (added > 0 || removed > 0) {
 		s.nodeLog.Info(fmt.Sprintf("users updated: +%d -%d", added, removed))
 	}
+	return true
 }
 
 // applyUserDelta applies an incremental user change (add or remove) directly
-// via the kernel's atomic user API. Kernel updates run before updateUserState.
-func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers []model.UserSpec) {
+// via the kernel's atomic user API. The latest state is prepared first so a
+// stopped kernel can start as soon as the first user arrives.
+func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers []model.UserSpec) bool {
 	switch action {
 	case "add":
 		// Defensive check for empty or nil deltaUsers
 		if deltaUsers == nil || len(deltaUsers) == 0 {
-			return
+			return true
 		}
+		uuidChange := hasUUIDChange(s.lastUsers, deltaUsers)
 		merged := mergeUsers(s.lastUsers, deltaUsers)
+		// UUID 变更走完整替换；失败时保留最新身份，不恢复旧用户。
+		if uuidChange {
+			return s.applyUserUpdate(ctx, merged, computeUserHash(merged))
+		}
+		wasRunning := s.kernel.IsRunning()
+		s.prepareUserState(merged)
 
-		if !s.ensureRunning() {
-			return
+		if !s.ensureRunning(ctx) {
+			return s.runtimeError == nil
+		}
+		if !wasRunning {
+			return true
 		}
 
-		for _, delta := range deltaUsers {
-			for _, old := range s.lastUsers {
-				if old.ID == delta.ID && old.UUID != delta.UUID {
-					s.kernel.RemoveUsers([]model.UserSpec{old})
-					break
-				}
-			}
-		}
-
-		prevUsers, prevHash := s.prepareUserState(merged)
 		added, err := s.kernel.AddUsers(deltaUsers)
 		if err != nil {
-			nlog.Core().Warn(fmt.Sprintf("AddUsers failed: %v, falling back to UpdateUsers", err))
+			nlog.Core().Error("新增用户热更新失败，尝试完整用户更新", "error", err)
 			if _, _, err := s.kernel.UpdateUsers(merged); err != nil {
-				nlog.Core().Error(fmt.Sprintf("UpdateUsers fallback failed: %v", err))
-				s.restoreUserState(prevUsers, prevHash)
-				return
+				s.failRuntime("新增用户失败", s.lastConfig, merged, err)
+				return false
 			}
 		}
 		if s.nodeLog != nil && added > 0 {
@@ -830,22 +905,21 @@ func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers 
 	case "remove":
 		// Defensive check for empty or nil deltaUsers
 		if deltaUsers == nil || len(deltaUsers) == 0 {
-			return
+			return true
 		}
 		filtered := subtractUsers(s.lastUsers, deltaUsers)
-
+		s.prepareUserState(filtered)
 		if !s.kernel.IsRunning() {
-			return
+			// 删除也可能修正失败快照，剩余用户应立即获得一次新的启动机会。
+			return s.applyChanges(ctx, true, false)
 		}
 
-		prevUsers, prevHash := s.prepareUserState(filtered)
 		removed, err := s.kernel.RemoveUsers(deltaUsers)
 		if err != nil {
-			nlog.Core().Warn(fmt.Sprintf("RemoveUsers failed: %v, falling back to UpdateUsers", err))
+			nlog.Core().Error("删除用户热更新失败，尝试完整用户更新", "error", err)
 			if _, _, err := s.kernel.UpdateUsers(filtered); err != nil {
-				nlog.Core().Error(fmt.Sprintf("UpdateUsers fallback failed: %v", err))
-				s.restoreUserState(prevUsers, prevHash)
-				return
+				s.failRuntime("删除用户失败", s.lastConfig, filtered, err)
+				return false
 			}
 		}
 		if s.nodeLog != nil && removed > 0 {
@@ -854,7 +928,24 @@ func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers 
 
 	default:
 		nlog.Core().Warn(fmt.Sprintf("unknown user delta action: %s", action))
+		return false
 	}
+	s.appliedState.Users = s.lastUsers
+	return true
+}
+
+// hasUUIDChange 识别增量消息中需要完整替换而不是单纯追加的凭据变更。
+func hasUUIDChange(base, delta []model.UserSpec) bool {
+	current := make(map[int]string, len(base))
+	for _, user := range base {
+		current[user.ID] = user.UUID
+	}
+	for _, user := range delta {
+		if uuid, exists := current[user.ID]; exists && uuid != user.UUID {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeUsers overlays deltaUsers onto base (keyed by ID). New users are
@@ -905,64 +996,76 @@ func subtractUsers(base, delta []model.UserSpec) []model.UserSpec {
 
 // applyChanges applies config changes to the kernel. User-only changes are
 // handled by applyUserUpdate/applyUserDelta directly via the atomic user API.
-func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged bool) {
-	if !configChanged {
-		return
+func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged bool) bool {
+	if !configChanged || s.lastConfig == nil {
+		return true
 	}
 
-	if s.lastConfig == nil || len(s.lastUsers) == 0 {
-		if len(s.lastUsers) == 0 {
-			s.kernel.Stop()
-			s.appliedState.Users = nil
-		}
-		return
+	// A landing node serves only the internal transit inbound, so an empty user
+	// set is its normal state and must not shut the kernel down.
+	isLanding := s.lastConfig.IsRelayLanding()
+
+	if !s.kernel.IsRunning() && (len(s.lastUsers) > 0 || isLanding) {
+		return s.startKernel(ctx, s.lastConfig, s.lastUsers)
+	}
+	if !s.prepareRuntime(ctx, s.lastConfig, s.lastUsers) {
+		return false
+	}
+	if len(s.lastUsers) == 0 && !isLanding {
+		s.kernel.Stop()
+		s.runtimeApplied(nil, nil)
+		return true
 	}
 
 	// If config changed, delegate to kernel.Reload. The kernel implementation
 	// decides whether to hot-swap users, reconstruct inbounds, or restart itself.
-	if configChanged && s.kernel.IsRunning() {
-		if err := s.kernel.Reload(s.lastConfig, s.lastUsers, s.cert.TLSCert()); err != nil {
-			nlog.Core().Warn(fmt.Sprintf("reload failed, restarting: %v", err))
-			s.startKernel(s.lastConfig, s.lastUsers)
-		} else {
-			s.appliedState.Config = s.lastConfig
-			s.appliedState.Users = s.lastUsers
-			if s.nodeLog != nil {
-				s.nodeLog.Info(fmt.Sprintf("config updated, %d users", len(s.lastUsers)))
-			}
-		}
-	} else if !s.kernel.IsRunning() {
-		s.startKernel(s.lastConfig, s.lastUsers)
+	if err := s.kernel.Reload(s.lastConfig, s.lastUsers, s.tlsCert()); err != nil {
+		s.failRuntime("重载内核失败", s.lastConfig, s.lastUsers, err)
+		return false
 	}
+	s.runtimeApplied(s.lastConfig, s.lastUsers)
+	if s.nodeLog != nil {
+		s.nodeLog.Info(fmt.Sprintf("config updated, %d users", len(s.lastUsers)))
+	}
+	return true
 }
 
 func (s *Service) trackAndEnforce(ctx context.Context) {
-	if !s.kernel.IsRunning() {
-		return
-	}
-
-	traffic, aliveIPs, connCount, err := s.kernel.GetUserTraffic(ctx)
+	connCount, userCount, err := s.collectTraffic(ctx)
 	if err != nil {
 		nlog.Core().Debug("get user traffic failed", "error", err)
 		return
 	}
 
-	s.tracker.Process(traffic, aliveIPs, connCount)
-
 	// Only log stats if there's actual traffic or connections
-	if connCount > 0 || len(traffic) > 0 {
+	if connCount > 0 || userCount > 0 {
 		if s.nodeLog != nil {
-			s.nodeLog.Debug(fmt.Sprintf("tracker: %d conns, %d users online", connCount, len(traffic)))
+			s.nodeLog.Debug(fmt.Sprintf("tracker: %d conns, %d users online", connCount, userCount))
 		} else {
-			nlog.TrackerStats(connCount, len(traffic))
+			nlog.TrackerStats(connCount, userCount)
 		}
 	}
 }
 
-// pushReportAsync sends the report in a background goroutine so the select
-// loop is never blocked by slow HTTP. Only one push runs at a time.
+// collectTraffic 只采样，不启动内核；停止节点和进程退出也需要读取最终累计值。
+func (s *Service) collectTraffic(ctx context.Context) (connCount, userCount int, err error) {
+	traffic, aliveIPs, connCount, err := s.kernel.GetUserTraffic(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	s.tracker.Process(traffic, aliveIPs, connCount)
+	s.trackRelayTraffic(ctx)
+	return connCount, len(traffic), nil
+}
+
+// pushReportAsync 在后台发送报告，避免慢 HTTP 阻塞主循环；同一时间只允许一个推送。
 func (s *Service) pushReportAsync() {
 	if !s.sink.SupportsReporting() {
+		return
+	}
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	if s.pushClosing {
 		return
 	}
 	if !s.pushActive.CompareAndSwap(false, true) {
@@ -975,46 +1078,183 @@ func (s *Service) pushReportAsync() {
 		return
 	}
 
-	traffic := s.tracker.FlushTraffic()
-	aliveIPs := s.tracker.FlushAliveIPs()
-	online := s.tracker.CurrentOnline()
-	status := monitor.Collect()
-	metrics := s.buildMetrics(status)
-	metrics["kernel_status"] = s.kernel.IsRunning()
+	batch := s.takeReportBatch()
+	s.pushWG.Add(1)
 
 	go func() {
+		defer s.pushWG.Done()
 		defer s.pushActive.Store(false)
-		if err := s.sink.Report(controlplane.ReportPayload{Traffic: traffic, Alive: aliveIPs, Online: online, CPU: status.CPU, Mem: [2]uint64{status.MemTotal, status.MemUsed}, Swap: [2]uint64{status.SwapTotal, status.SwapUsed}, Disk: [2]uint64{status.DiskTotal, status.DiskUsed}, Metrics: metrics}); err != nil {
+		if err := s.sink.Report(batch.payload); err != nil {
 			nlog.Core().Warn("failed to push report", "error", err)
-			if len(traffic) > 0 {
-				s.tracker.RestoreTraffic(traffic)
-			}
-			if len(aliveIPs) > 0 {
-				s.tracker.RestoreAliveIPs(aliveIPs)
-			}
+			s.rememberFailedReport(batch)
 			s.pushBackoff.onFailure()
 			return
 		}
+		s.forgetCompletedReport(batch)
 		s.pushBackoff.onSuccess()
-		nlog.ReportPushed(len(traffic), len(online))
+		nlog.ReportPushed(len(batch.payload.Traffic), len(batch.payload.Online))
 	}()
 }
 
-// pushReportSync is used only during shutdown to ensure final data is sent.
+// pushReportSync 等待在途报告并补采停止后的累计计数，先重试旧批次再刷出最后增量。
 func (s *Service) pushReportSync() {
 	if !s.sink.SupportsReporting() {
 		return
 	}
-	traffic := s.tracker.FlushTraffic()
-	aliveIPs := s.tracker.FlushAliveIPs()
-	online := s.tracker.CurrentOnline()
+	s.pushMu.Lock()
+	s.pushClosing = true
+	s.pushMu.Unlock()
+	s.pushWG.Wait()
+
+	// 不调用 trackAndEnforce，避免退出采样把已经停止的内核重新启动。
+	if _, _, err := s.collectTraffic(context.Background()); err != nil {
+		nlog.Core().Warn("failed to collect final traffic", "error", err)
+	}
+
+	s.reportMu.Lock()
+	hasRetry := s.retryReport != nil
+	s.reportMu.Unlock()
+	batchCount := 1
+	if hasRetry {
+		batchCount++
+	}
+	for range batchCount {
+		batch := s.takeReportBatch()
+		if err := s.sink.Report(batch.payload); err != nil {
+			nlog.Core().Warn("failed to push final report", "error", err)
+			s.rememberFailedReport(batch)
+			return
+		}
+		s.forgetCompletedReport(batch)
+	}
+}
+
+// takeReportBatch 优先返回失败批次。新产生的数据留在 tracker 中，直到旧批次成功，
+// 因而重试不会在同一 ID 下混入已经接受过的新流量。
+func (s *Service) takeReportBatch() *reportBatch {
+	s.reportMu.Lock()
+	if s.retryReport != nil {
+		batch := s.retryReport
+		s.reportMu.Unlock()
+		return batch
+	}
+	s.reportMu.Unlock()
+
+	traffic := cloneTraffic(s.tracker.FlushTraffic())
+	relayTraffic := cloneTraffic(s.tracker.FlushRelayTraffic())
+	relayUserTraffic := cloneRelayUserTraffic(s.tracker.FlushRelayUserTraffic())
+	aliveIPs := cloneAliveIPs(s.tracker.FlushAliveIPs())
 	status := monitor.Collect()
 	metrics := s.buildMetrics(status)
 	metrics["kernel_status"] = s.kernel.IsRunning()
+	reportID := s.nextReportID()
 
-	if err := s.sink.Report(controlplane.ReportPayload{Traffic: traffic, Alive: aliveIPs, Online: online, CPU: status.CPU, Mem: [2]uint64{status.MemTotal, status.MemUsed}, Swap: [2]uint64{status.SwapTotal, status.SwapUsed}, Disk: [2]uint64{status.DiskTotal, status.DiskUsed}, Metrics: metrics}); err != nil {
-		nlog.Core().Warn("failed to push final report", "error", err)
+	return &reportBatch{
+		id: reportID,
+		payload: controlplane.ReportPayload{
+			ReportID:         reportID,
+			Traffic:          traffic,
+			RelayTraffic:     relayTraffic,
+			RelayUserTraffic: relayUserTraffic,
+			Alive:            aliveIPs,
+			Online:           s.tracker.CurrentOnline(),
+			CPU:              status.CPU,
+			Mem:              [2]uint64{status.MemTotal, status.MemUsed},
+			Swap:             [2]uint64{status.SwapTotal, status.SwapUsed},
+			Disk:             [2]uint64{status.DiskTotal, status.DiskUsed},
+			Metrics:          metrics,
+		},
 	}
+}
+
+// trackRelayTraffic 从入口内部出站采集按逻辑节点统计的中转流量；不支持该能力的内核跳过。
+func (s *Service) trackRelayTraffic(ctx context.Context) {
+	// 内核可能仍在结算上一个中转配置，不能只按当前节点角色过滤。
+	reader, ok := s.kernel.(kernel.RelayTrafficReader)
+	if !ok {
+		return
+	}
+	relay, err := reader.GetRelayTraffic(ctx)
+	if err != nil {
+		nlog.Core().Debug("get relay traffic failed", "error", err)
+		return
+	}
+	s.tracker.ProcessRelay(relay)
+
+	userReader, ok := s.kernel.(kernel.RelayUserTrafficReader)
+	if !ok {
+		return
+	}
+	relayUser, err := userReader.GetRelayUserTraffic(ctx)
+	if err != nil {
+		nlog.Core().Debug("get per-user relay traffic failed", "error", err)
+		return
+	}
+	s.tracker.ProcessRelayUser(relayUser)
+}
+
+func (s *Service) nextReportID() string {
+	s.reportMu.Lock()
+	defer s.reportMu.Unlock()
+	seq := s.reportSeq.Add(1)
+	if s.reportBoot == "" {
+		s.reportBoot = newReportBootID()
+	}
+	return fmt.Sprintf("%s-%d", s.reportBoot, seq)
+}
+
+func (s *Service) rememberFailedReport(batch *reportBatch) {
+	s.reportMu.Lock()
+	s.retryReport = batch
+	s.reportMu.Unlock()
+}
+
+func (s *Service) forgetCompletedReport(batch *reportBatch) {
+	s.reportMu.Lock()
+	if s.retryReport == batch {
+		s.retryReport = nil
+	}
+	s.reportMu.Unlock()
+}
+
+func cloneTraffic(src map[int][2]int64) map[int][2]int64 {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[int][2]int64, len(src))
+	for uid, value := range src {
+		dst[uid] = value
+	}
+	return dst
+}
+
+func cloneRelayUserTraffic(src map[int]map[int][2]int64) map[int]map[int][2]int64 {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[int]map[int][2]int64, len(src))
+	for uid, nodes := range src {
+		if len(nodes) == 0 {
+			continue
+		}
+		copyNodes := make(map[int][2]int64, len(nodes))
+		for nodeID, value := range nodes {
+			copyNodes[nodeID] = value
+		}
+		out[uid] = copyNodes
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func cloneAliveIPs(src map[int][]string) map[int][]string {
+	dst := make(map[int][]string, len(src))
+	for uid, ips := range src {
+		dst[uid] = append([]string(nil), ips...)
+	}
+	return dst
 }
 
 // buildMetrics aggregates node-level metrics to be reported to the panel.
@@ -1135,11 +1375,6 @@ func (s *Service) sendDeviceBatch() {
 	}
 
 	devices := s.tracker.FlushAliveIPs()
-	// FlushAliveIPs returns nil if no changes since last flush
-	if devices == nil {
-		nlog.Core().Debug("device snapshot unchanged, skipping")
-		return
-	}
 	s.sink.ReportDevices(s.wsClient, devices)
 	nlog.Core().Debug("device snapshot sent", "users", len(devices))
 }
@@ -1156,7 +1391,14 @@ func validateNodeRuntime(cfg *config.Config, kcfgSupported []string, spec *model
 		return fmt.Errorf("node spec is nil")
 	}
 	if !containsString(kcfgSupported, spec.Protocol) {
-		return fmt.Errorf("protocol %q is not supported by kernel %q", spec.Protocol, cfg.Kernel.Type)
+		return fmt.Errorf("protocol %q is not supported by kernel %q", spec.Protocol, cfgKernelType(cfg))
+	}
+	var kcfg config.KernelConfig
+	if cfg != nil {
+		kcfg = cfg.Kernel
+	}
+	if err := model.ValidateNodeSpec(spec, kcfg); err != nil {
+		return err
 	}
 	if err := validateTLSRequirements(spec, tls, cfgKernelType(cfg)); err != nil {
 		return err

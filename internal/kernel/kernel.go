@@ -84,6 +84,7 @@ type Kernel interface {
 	// per-user atomic counters — no per-connection iteration needed.
 	// aliveIPs maps userID → set of source IPs currently connected.
 	// traffic maps userID → [upload, download] cumulative bytes.
+	// 累计计数跟随 Kernel 对象，不因 Start、Reload、Stop 清零；Stop 后仍可读取最终值。
 	// connCount is the total number of active connections (for metrics).
 	GetUserTraffic(ctx context.Context) (traffic map[int][2]int64, aliveIPs map[int]map[string]bool, connCount int, err error)
 	// CloseConnection terminates a specific connection by ID.
@@ -103,6 +104,20 @@ type Kernel interface {
 	ClearGlobalDevices()
 }
 
+// RelayTrafficReader is an optional capability implemented by kernels that can
+// measure per-logical-node traffic on a relay entry's internal outbounds.
+//
+// The returned map is cumulative and keyed by logical node ID. It is landing-line
+// operating data reported on its own channel; it must not feed user billing.
+type RelayTrafficReader interface {
+	GetRelayTraffic(ctx context.Context) (map[int][2]int64, error)
+}
+
+// RelayUserTrafficReader 是中转入口内核可选的用户-逻辑节点累计流量能力。
+type RelayUserTrafficReader interface {
+	GetRelayUserTraffic(ctx context.Context) (map[int]map[int][2]int64, error)
+}
+
 // ComputeHash returns a hash of config + user identities that would
 // require a kernel restart/reconstruction if changed.
 func ComputeHash(nc *model.NodeSpec, users []model.UserSpec) string {
@@ -118,9 +133,8 @@ func ComputeHash(nc *model.NodeSpec, users []model.UserSpec) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-// UserDiff computes which users to add and which to remove when transitioning
-// from oldUsers to newUsers. This is a pure helper used by callers; kernels
-// may also use it internally.
+// UserDiff 计算用户集替换时的新增项和删除项。
+// 同一 ID 的 UUID 变化属于凭据替换，必须同时删除旧凭据并添加新凭据。
 func UserDiff(oldUsers, newUsers []model.UserSpec) (toAdd, toRemove []model.UserSpec) {
 	oldMap := make(map[int]model.UserSpec, len(oldUsers))
 	for _, u := range oldUsers {
@@ -138,7 +152,8 @@ func UserDiff(oldUsers, newUsers []model.UserSpec) (toAdd, toRemove []model.User
 		}
 	}
 	for _, u := range oldUsers {
-		if _, exists := newMap[u.ID]; !exists {
+		updated, exists := newMap[u.ID]
+		if !exists || updated.UUID != u.UUID {
 			toRemove = append(toRemove, u)
 		}
 	}

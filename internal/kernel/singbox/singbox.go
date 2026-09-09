@@ -1,20 +1,19 @@
 package singbox
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/include"
-	singLog "github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/auth"
 	singJSON "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/ntp"
 	"github.com/sagernet/sing/service"
 	"golang.org/x/time/rate"
 
@@ -22,6 +21,7 @@ import (
 	"github.com/cedar2025/xboard-node/internal/kernel"
 	"github.com/cedar2025/xboard-node/internal/model"
 	"github.com/cedar2025/xboard-node/internal/nlog"
+	"github.com/cedar2025/xboard-node/internal/timesync"
 )
 
 // drainTimeout is how long stop() waits for in-flight connections to finish
@@ -45,10 +45,9 @@ type SingBox struct {
 	nodeConfig *model.NodeSpec
 	tls        kernel.TLSCert
 
-	// connTracker is our lightweight in-process byte/IP tracker.
-	// Created fresh on every Start (full restart).
-	// Survives Reload (hot-swap) since live connections persist.
+	// 每个 Box 独立维护连接状态，所有 Box 共享生命周期累计流量。
 	connTracker *ConnTracker
+	traffic     *trafficTotals
 
 	// speedLimitFunc resolves a user UUID to a *rate.Limiter.
 	// Set once by SetSpeedLimitFunc and forwarded to every new ConnTracker.
@@ -57,14 +56,10 @@ type SingBox struct {
 	// deviceLimitFunc resolves a user UUID to (limit, hasLimit) for gate-keeping.
 	// Set once by SetDeviceLimitFunc and forwarded to every new ConnTracker.
 	deviceLimitFunc func(string) (int, bool)
-
-	// trackerRegistered prevents duplicate AppendTracker calls on the same
-	// Router instance during Reload. Reset to false on full restart.
-	trackerRegistered bool
 }
 
 func New(cfg config.KernelConfig) *SingBox {
-	return &SingBox{cfg: cfg}
+	return &SingBox{cfg: cfg, traffic: newTrafficTotals()}
 }
 
 var _ kernel.Kernel = (*SingBox)(nil)
@@ -92,8 +87,19 @@ func (s *SingBox) Protocols() []string {
 func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.startLocked(nodeConfig, users, tls)
+}
 
-	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
+// startLocked 先构造候选实例，释放旧实例资源后启动；失败直接返回错误。
+// 同端口监听、缓存数据库等资源不能由两个 Box 同时占用。
+func (s *SingBox) startLocked(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
+	if err := s.validateRelay(nodeConfig, users); err != nil {
+		return err
+	}
+	cfgMap, err := buildConfig(s.cfg, nodeConfig, users, tls)
+	if err != nil {
+		return err
+	}
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -102,19 +108,18 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 	nlog.Core().Debug("sing-box config generated", "len", len(data))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	ctx = include.Context(ctx)
+	ctx, err = directOutboundContext(ctx, nodeConfig.CustomOutbounds)
+	if err != nil {
+		cancel()
+		return err
+	}
+	service.MustRegister[ntp.TimeService](ctx, timesync.Default())
 
 	opts, err := singJSON.UnmarshalExtendedContext[option.Options](ctx, data)
 	if err != nil {
 		cancel()
 		return fmt.Errorf("parse sing-box options: %w", err)
 	}
-
-	// Save old state before creating the new instance.
-	oldBox := s.box
-	oldCancel := s.cancel
-	oldCtx := s.ctx
-	oldTracker := s.connTracker
 
 	instance, err := box.New(box.Options{
 		Context: ctx,
@@ -125,6 +130,27 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 		return fmt.Errorf("create sing-box instance: %w", err)
 	}
 
+	// 在开放监听前注册统计器，首个连接也必须纳入同一份用户统计。
+	tracker := NewConnTracker(0)
+	tracker.traffic = s.traffic
+	if previous := s.connTracker; previous != nil {
+		// 设备快照更新时整体替换 map，可共享只读快照；沿用时间戳以保留原过期语义。
+		previous.globalMu.RLock()
+		tracker.globalDevices = previous.globalDevices
+		tracker.globalLastUpdate = previous.globalLastUpdate
+		previous.globalMu.RUnlock()
+	}
+	tracker.setNodeUsers(nodeConfig, users)
+	if s.speedLimitFunc != nil {
+		tracker.SetSpeedLimitFunc(s.speedLimitFunc)
+	}
+	if s.deviceLimitFunc != nil {
+		tracker.SetDeviceLimitFunc(s.deviceLimitFunc)
+	}
+	instance.Router().AppendTracker(tracker)
+	if s.box != nil {
+		s.stop()
+	}
 	if err := instance.Start(); err != nil {
 		instance.Close()
 		cancel()
@@ -139,59 +165,13 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 	s.nodeConfig = nodeConfig
 	s.tls = tls
 
-	// Fresh tracker on full restart.
-	s.connTracker = NewConnTracker(0)
-	s.connTracker.SetUserMap(buildUserMap(users))
-	if s.speedLimitFunc != nil {
-		s.connTracker.SetSpeedLimitFunc(s.speedLimitFunc)
-	}
-	if s.deviceLimitFunc != nil {
-		s.connTracker.SetDeviceLimitFunc(s.deviceLimitFunc)
-	}
-
-	s.trackerRegistered = false
-	s.registerTracker(ctx)
-
-	// Recycle old instance in background — drain then close.
-	if oldBox != nil {
-		go recycleOldBox(oldBox, oldCancel, oldCtx, oldTracker)
-	}
+	s.connTracker = tracker
 
 	nlog.Core().Debug("sing-box started", "users", len(users))
 	return nil
 }
 
-// recycleOldBox gracefully shuts down a previous sing-box instance in the
-// background. It closes listen sockets first, waits for connections to drain,
-// then hard-closes. This avoids blocking the new instance's startup.
-func recycleOldBox(oldBox *box.Box, oldCancel context.CancelFunc, oldCtx context.Context, oldTracker *ConnTracker) {
-	// Step 1: close listen sockets so no new connections arrive on old ports.
-	if im := service.FromContext[adapter.InboundManager](oldCtx); im != nil {
-		_ = im.Close()
-	}
-
-	// Step 2: drain in-flight connections (best-effort).
-	if oldTracker != nil {
-		deadline := time.Now().Add(drainTimeout)
-		for time.Now().Before(deadline) {
-			if oldTracker.ActiveCount() == 0 {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-
-	// Step 3: hard-close everything.
-	oldBox.Close()
-	if oldCancel != nil {
-		oldCancel()
-	}
-	nlog.Core().Debug("sing-box: old instance recycled")
-}
-
-// Reload hot-swaps the inbound users and routing rules without restarting the box.
-// Routes, outbounds, and the connTracker stay alive so in-flight connections
-// continue to be tracked correctly.
+// Reload 对纯路由规则变化使用热更新，其他运行配置变化完整重建，失败直接返回错误。
 func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -199,8 +179,14 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 	if s.box == nil {
 		return fmt.Errorf("not running")
 	}
+	if err := s.validateRelay(nodeConfig, users); err != nil {
+		return err
+	}
 
-	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
+	cfgMap, err := buildConfig(s.cfg, nodeConfig, users, tls)
+	if err != nil {
+		return err
+	}
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -211,9 +197,13 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 		return fmt.Errorf("parse options: %w", err)
 	}
 
-	im := service.FromContext[adapter.InboundManager](s.ctx)
-	if im == nil {
-		return fmt.Errorf("inbound manager not available")
+	previous, err := buildConfig(s.cfg, s.nodeConfig, s.users, s.tls)
+	if err != nil {
+		return err
+	}
+	// 原生绑定与旧式单地址绑定可能生成相同字段，但连接时的地址族约束不同。
+	if !onlyRouteRulesChanged(previous, cfgMap) || !reflect.DeepEqual(s.nodeConfig.CustomOutbounds, nodeConfig.CustomOutbounds) {
+		return s.startLocked(nodeConfig, users, tls)
 	}
 
 	router := service.FromContext[adapter.Router](s.ctx)
@@ -221,90 +211,22 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 		return fmt.Errorf("router not available")
 	}
 
-	// Update routing rules
-	if err := router.UpdateRules(opts.Route.Rules, opts.Route.RuleSet); err != nil {
-		nlog.Core().Debug("routing reload failed", "error", err)
-	} else {
-		nlog.Core().Debug("sing-box routing reloaded")
+	// 路由应用失败时保留旧配置状态，让上层能够重试同一配置。
+	updater, ok := router.(interface {
+		UpdateRules([]option.Rule, []option.RuleSet) error
+	})
+	if !ok {
+		return fmt.Errorf("sing-box router does not support rule updates")
 	}
-
-	nopFactory := singLog.NewNOPFactory()
-
-	// Configuration hash check for inbound reconstruction
-	tlsChanged := !bytes.Equal(s.tls.CertPEM, tls.CertPEM) || !bytes.Equal(s.tls.KeyPEM, tls.KeyPEM)
-	configChanged := tlsChanged || s.nodeConfig == nil || kernel.ComputeHash(nodeConfig, users) != kernel.ComputeHash(s.nodeConfig, s.users)
-
-	for _, inb := range opts.Inbounds {
-		tag := inb.Tag
-		if !configChanged {
-			if existing, ok := im.Get(tag); ok && existing.Type() == inb.Type {
-				var err error
-				switch v := existing.(type) {
-				case adapter.UpdatableInbound[option.VMessUser]:
-					if opts, ok := inb.Options.(*option.VMessInboundOptions); ok {
-						err = v.UpdateUsers(opts.Users)
-					}
-				case adapter.UpdatableInbound[option.VLESSUser]:
-					if opts, ok := inb.Options.(*option.VLESSInboundOptions); ok {
-						err = v.UpdateUsers(opts.Users)
-					}
-				case adapter.UpdatableInbound[option.TrojanUser]:
-					if opts, ok := inb.Options.(*option.TrojanInboundOptions); ok {
-						err = v.UpdateUsers(opts.Users)
-					}
-				case adapter.UpdatableInbound[option.Hysteria2User]:
-					if opts, ok := inb.Options.(*option.Hysteria2InboundOptions); ok {
-						err = v.UpdateUsers(opts.Users)
-					}
-				case adapter.UpdatableShadowsocksInbound:
-					if opts, ok := inb.Options.(*option.ShadowsocksInboundOptions); ok {
-						err = v.UpdateUsersByOptions(opts.Users)
-					}
-				case adapter.UpdatableInbound[option.TUICUser]:
-					if opts, ok := inb.Options.(*option.TUICInboundOptions); ok {
-						err = v.UpdateUsers(opts.Users)
-					}
-				case adapter.UpdatableInbound[option.AnyTLSUser]:
-					if opts, ok := inb.Options.(*option.AnyTLSInboundOptions); ok {
-						err = v.UpdateUsers(opts.Users)
-					}
-				case adapter.UpdatableInbound[option.MieruUser]:
-					if opts, ok := inb.Options.(*option.MieruInboundOptions); ok {
-						err = v.UpdateUsers(opts.Users)
-					}
-				case adapter.UpdatableInbound[auth.User]:
-					switch opts := inb.Options.(type) {
-					case *option.NaiveInboundOptions:
-						err = v.UpdateUsers(opts.Users)
-					case *option.SocksInboundOptions:
-						err = v.UpdateUsers(opts.Users)
-					case *option.HTTPMixedInboundOptions:
-						err = v.UpdateUsers(opts.Users)
-					}
-				}
-				if err == nil {
-					continue
-				}
-				nlog.Core().Warn("incremental update failed, falling back to recreate", "tag", tag, "error", err)
-			}
-		}
-
-		// Config mismatch or incremental update failure: Reconstruct Inbound.
-		// Remove the existing inbound first so im.Create() can bind the same port.
-		// im.Create() cannot atomically swap a TCP listener — it tries to start the
-		// new socket before the old one is closed, causing "address already in use".
-		// The brief listen gap (< 1 ms) is far less disruptive than a full restart.
-		_ = im.Remove(tag) // ignore error when tag doesn't exist yet
-		logger := nopFactory.NewLogger(fmt.Sprintf("inbound/%s[%s]", inb.Type, tag))
-		if err := im.Create(s.ctx, router, logger, tag, inb.Type, inb.Options); err != nil {
-			return fmt.Errorf("recreate inbound %s: %w", tag, err)
-		}
+	if err := updater.UpdateRules(opts.Route.Rules, opts.Route.RuleSet); err != nil {
+		return fmt.Errorf("reload sing-box routes: %w", err)
 	}
+	nlog.Core().Debug("sing-box routing reloaded")
 
 	// Trackers remain registered on the Router (which survives ReloadUsers).
 	// Only update the user map — do NOT re-register or traffic is double-counted.
 	if s.connTracker != nil {
-		s.connTracker.SetUserMap(buildUserMap(users))
+		s.connTracker.setNodeUsers(nodeConfig, users)
 	}
 
 	nlog.Core().Debug("sing-box reloaded", "users", len(users))
@@ -314,21 +236,15 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 	return nil
 }
 
-// registerTracker wires the ConnTracker to the current Router exactly once.
-// The ConnTracker handles both byte counting and optional rate limiting
-// in a single wrapper, so no additional trackers are needed.
-func (s *SingBox) registerTracker(ctx context.Context) {
-	if s.trackerRegistered {
-		return
+func onlyRouteRulesChanged(previous, next M) bool {
+	// buildConfig 每次创建独立的 route 容器，这里只移除可事务热更新的两个字段。
+	for _, cfg := range []M{previous, next} {
+		if route, ok := cfg["route"].(M); ok {
+			delete(route, "rules")
+			delete(route, "rule_set")
+		}
 	}
-	router := service.FromContext[adapter.Router](ctx)
-	if router == nil {
-		return
-	}
-	if s.connTracker != nil {
-		router.AppendTracker(s.connTracker)
-	}
-	s.trackerRegistered = true
+	return reflect.DeepEqual(previous, next)
 }
 
 func (s *SingBox) Stop() {
@@ -443,6 +359,7 @@ func (s *SingBox) AddUsers(users []model.UserSpec) (int, error) {
 	for _, u := range users {
 		if _, dup := existing[u.ID]; !dup {
 			toAdd = append(toAdd, u)
+			existing[u.ID] = struct{}{}
 		}
 	}
 	if len(toAdd) == 0 {
@@ -499,6 +416,9 @@ func (s *SingBox) UpdateUsers(users []model.UserSpec) (added, removed int, err e
 	if s.box == nil {
 		return 0, 0, fmt.Errorf("not running")
 	}
+	if err := validateRelayUsers(s.nodeConfig, users); err != nil {
+		return 0, 0, err
+	}
 
 	toAdd, toRemove := kernel.UserDiff(s.users, users)
 	added, removed = len(toAdd), len(toRemove)
@@ -506,7 +426,7 @@ func (s *SingBox) UpdateUsers(users []model.UserSpec) (added, removed int, err e
 	if added == 0 && removed == 0 {
 		// Only limits may have changed — update tracker map.
 		if s.connTracker != nil {
-			s.connTracker.SetUserMap(buildUserMap(users))
+			s.connTracker.setNodeUsers(s.nodeConfig, users)
 		}
 		s.users = users
 		return 0, 0, nil
@@ -522,7 +442,13 @@ func (s *SingBox) UpdateUsers(users []model.UserSpec) (added, removed int, err e
 // reloadInboundsLocked hot-swaps inbound users using UpdatableInbound.
 // Must be called with s.mu held.
 func (s *SingBox) reloadInboundsLocked(users []model.UserSpec) error {
-	cfgMap := buildConfig(s.cfg, s.nodeConfig, users, s.tls)
+	if err := validateRelayUsers(s.nodeConfig, users); err != nil {
+		return err
+	}
+	cfgMap, err := buildConfig(s.cfg, s.nodeConfig, users, s.tls)
+	if err != nil {
+		return err
+	}
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -532,23 +458,28 @@ func (s *SingBox) reloadInboundsLocked(users []model.UserSpec) error {
 	if err != nil {
 		return fmt.Errorf("parse options: %w", err)
 	}
+	if s.nodeConfig.IsRelayEntry() {
+		return s.reloadRelayUsersLocked(users, opts)
+	}
+	if err := s.updateInboundUsersLocked(opts); err != nil {
+		return err
+	}
+	if s.connTracker != nil {
+		s.connTracker.setNodeUsers(s.nodeConfig, users)
+	}
+	return nil
+}
 
+func (s *SingBox) updateInboundUsersLocked(opts option.Options) error {
 	im := service.FromContext[adapter.InboundManager](s.ctx)
 	if im == nil {
 		return fmt.Errorf("inbound manager not available")
 	}
 
-	router := service.FromContext[adapter.Router](s.ctx)
-	if router == nil {
-		return fmt.Errorf("router not available")
-	}
-
-	nopFactory := singLog.NewNOPFactory()
-
 	for _, inb := range opts.Inbounds {
 		tag := inb.Tag
 		if existing, ok := im.Get(tag); ok && existing.Type() == inb.Type {
-			var err error
+			err := fmt.Errorf("inbound %s does not support user updates", tag)
 			switch v := existing.(type) {
 			case adapter.UpdatableInbound[option.VMessUser]:
 				if opts, ok := inb.Options.(*option.VMessInboundOptions); ok {
@@ -595,31 +526,22 @@ func (s *SingBox) reloadInboundsLocked(users []model.UserSpec) error {
 			if err == nil {
 				continue
 			}
-			nlog.Core().Warn("incremental update failed, recreating inbound", "tag", tag, "error", err)
+			return fmt.Errorf("update inbound %s users: %w", tag, err)
 		}
-
-		_ = im.Remove(tag)
-		logger := nopFactory.NewLogger(fmt.Sprintf("inbound/%s[%s]", inb.Type, tag))
-		if err := im.Create(s.ctx, router, logger, tag, inb.Type, inb.Options); err != nil {
-			return fmt.Errorf("recreate inbound %s: %w", tag, err)
-		}
+		return fmt.Errorf("inbound %s not available for user updates", tag)
 	}
 
-	if s.connTracker != nil {
-		s.connTracker.SetUserMap(buildUserMap(users))
-	}
-
-	nlog.Core().Debug("sing-box users hot-swapped", "users", len(users))
 	return nil
 }
 
 // ─── Observability ──────────────────────────────────────────────────────────
 func (s *SingBox) GetUserTraffic(_ context.Context) (traffic map[int][2]int64, aliveIPs map[int]map[string]bool, connCount int, err error) {
-	ct := s.connTrackerSafe()
-	if ct == nil {
-		return nil, nil, 0, nil
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	traffic = s.traffic.snapshot()
+	if s.box != nil && s.connTracker != nil {
+		_, aliveIPs, connCount = s.connTracker.GetUserTraffic()
 	}
-	traffic, aliveIPs, connCount = ct.GetUserTraffic()
 	return traffic, aliveIPs, connCount, nil
 }
 

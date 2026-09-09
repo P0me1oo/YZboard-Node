@@ -1,6 +1,12 @@
 name: CI
 
 on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "可选：要发布的固定 Git Tag，例如 v1.13-yz.3；留空仅验证所选 ref"
+        required: false
+        type: string
   push:
     branches: [main, master, dev]
     tags: ["v*"]
@@ -14,17 +20,49 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify fixed release source
+        id: source
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          if [[ -n "$RELEASE_TAG" ]]; then
+            if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+-yz\.[0-9]+$ ]]; then
+              echo "release_tag must match v<upstream>-yz.<patch>" >&2
+              exit 1
+            fi
+            tag_sha=$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")
+            if [[ "$source_sha" != "$tag_sha" ]]; then
+              echo "checked out commit does not match ${RELEASE_TAG}" >&2
+              exit 1
+            fi
+          fi
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.7'
+          go-version: '1.26.4'
           cache: true
 
       - name: Run tests
         run: make test
+
+      - name: Validate installer syntax
+        run: |
+          bash -n install.sh tests/install_service_manager_test.sh tests/install_paths_test.sh tests/singbox_isolated_install.sh
+          python3 -c 'import ast, pathlib; [ast.parse(path.read_text(encoding="utf-8")) for path in pathlib.Path("tests").glob("*.py")]'
 
   build:
     name: Build
@@ -39,22 +77,55 @@ jobs:
             goarch: arm64
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.test.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.7'
+          go-version: '1.26.4'
           cache: true
 
       - name: Build
         env:
-          VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.sha }}
+          VERSION: ${{ inputs.release_tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || needs.test.outputs.source_sha }}
         run: |
           if [ "${{ matrix.goarch }}" = "amd64" ]; then
             make build-linux
           else
             make build-linux-arm64
           fi
+
+      - name: Verify build source and target
+        env:
+          SOURCE_COMMIT: ${{ needs.test.outputs.source_sha }}
+          TARGET_ARCH: ${{ matrix.goarch }}
+          BUILD_VERSION: ${{ inputs.release_tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || needs.test.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          for name in xboard-node xbctl; do
+            binary="${name}-linux-${TARGET_ARCH}"
+            go version -m "$binary" | tee "${binary}.buildinfo.txt"
+            grep -Fq "vcs.revision=${SOURCE_COMMIT}" "${binary}.buildinfo.txt"
+            grep -Fq 'vcs.modified=false' "${binary}.buildinfo.txt"
+            grep -Fq 'GOOS=linux' "${binary}.buildinfo.txt"
+            grep -Fq "GOARCH=${TARGET_ARCH}" "${binary}.buildinfo.txt"
+            grep -Fq 'CGO_ENABLED=0' "${binary}.buildinfo.txt"
+            if [[ "$TARGET_ARCH" == amd64 ]]; then
+              version_output=$("./$binary" -v)
+              printf '%s\n' "$version_output"
+              grep -Fq "${name} ${BUILD_VERSION} (built " <<< "$version_output"
+              grep -Fq "commit ${SOURCE_COMMIT})" <<< "$version_output"
+            fi
+          done
+
+      - name: Upload build metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-metadata-${{ matrix.goarch }}
+          path: '*.buildinfo.txt'
 
       - name: Upload xboard-node artifact
         uses: actions/upload-artifact@v4
@@ -71,12 +142,16 @@ jobs:
   build-docker:
     name: Build & Push Docker Image
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, build]
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.test.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -92,37 +167,85 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push
+        id: image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            NODE_VERSION=${{ inputs.release_tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || needs.test.outputs.source_sha }}
+            SOURCE_COMMIT=${{ needs.test.outputs.source_sha }}
           tags: |
-            ghcr.io/cedar2025/xboard-node:latest
-            ghcr.io/cedar2025/xboard-node:${{ github.sha }}
-            ${{ startsWith(github.ref, 'refs/tags/') && format('ghcr.io/cedar2025/xboard-node:{0}', github.ref_name) || '' }}
+            ghcr.io/p0me1oo/yzboard-node:${{ needs.test.outputs.source_sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.test.outputs.source_sha }}
+            org.opencontainers.image.version=${{ inputs.release_tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || needs.test.outputs.source_sha }}
+
+      - name: Verify image versions before publishing release aliases
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          SOURCE_COMMIT: ${{ needs.test.outputs.source_sha }}
+          BUILD_VERSION: ${{ inputs.release_tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || needs.test.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          image_index=$(docker buildx imagetools inspect "ghcr.io/p0me1oo/yzboard-node@$IMAGE_DIGEST" --raw)
+          for arch in amd64 arm64; do
+            platform_digest=$(jq -er --arg arch "$arch" \
+              '.manifests | map(select(.platform.os == "linux" and .platform.architecture == $arch)) | if length == 1 then .[0].digest else error("expected exactly one platform manifest") end' \
+              <<< "$image_index")
+            version_output=$(docker run --rm --platform "linux/$arch" "ghcr.io/p0me1oo/yzboard-node@$platform_digest" -v)
+            printf '%s\n' "$version_output"
+            grep -Fq "xboard-node ${BUILD_VERSION} (built " <<< "$version_output"
+            grep -Fq "commit ${SOURCE_COMMIT})" <<< "$version_output"
+          done
+          echo "Image digest: $IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish verified release aliases
+        if: inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/')
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          RELEASE_VERSION: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          docker buildx imagetools create \
+            --tag "ghcr.io/p0me1oo/yzboard-node:$RELEASE_VERSION" \
+            --tag ghcr.io/p0me1oo/yzboard-node:latest \
+            "ghcr.io/p0me1oo/yzboard-node@$IMAGE_DIGEST"
 
   release:
     name: Release
     runs-on: ubuntu-latest
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/dev'
+    needs: [test, build, build-docker]
+    if: inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.test.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           merge-multiple: true
           path: dist
+      - name: Add installer to release
+        run: install -m 0755 install.sh dist/install.sh
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum xboard-node-linux-amd64 xboard-node-linux-arm64 xbctl-linux-amd64 xbctl-linux-arm64 install.sh *.buildinfo.txt > SHA256SUMS
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'dev' }}
-          make_latest: ${{ startsWith(github.ref, 'refs/tags/') }}
+          tag_name: ${{ inputs.release_tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || 'dev' }}
+          make_latest: ${{ inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/') }}
           files: |
             dist/xboard-node-linux-amd64
             dist/xboard-node-linux-arm64
             dist/xbctl-linux-amd64
             dist/xbctl-linux-arm64
+            dist/install.sh
+            dist/SHA256SUMS
+            dist/*.buildinfo.txt

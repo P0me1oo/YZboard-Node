@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/buf"
 	singM "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -31,8 +32,7 @@ var ipPool = sync.Pool{
 // Traffic counters are lock-free atomics (read on every packet).
 // IP tracking uses a lightweight mutex (only touched at connect/disconnect).
 type userStats struct {
-	upload   atomic.Int64
-	download atomic.Int64
+	*userTraffic
 
 	mu        sync.RWMutex   // RWMutex for concurrent reads
 	ips       map[string]int // sourceIP → refcount (number of active conns from that IP)
@@ -122,10 +122,14 @@ func (u *userStats) aliveIPList() map[string]bool {
 //   - Close callback to decrement IP refcounts
 //   - Per-connection rate limit token accumulation (amortized WaitN)
 type ConnTracker struct {
-	usersMu sync.RWMutex
-	users   map[int]*userStats  // userID → stats
-	uuidMap map[string]int      // UUID → userID (for lookup in RoutedConnection)
-	connMap map[string]net.Conn // connID → conn (only for force-close support)
+	traffic    *trafficTotals
+	usersMu    sync.RWMutex
+	users      map[int]*userStats  // userID → stats
+	uuidMap    map[string]int      // UUID → userID (for lookup in RoutedConnection)
+	connMap    map[string]net.Conn // connID → conn (only for force-close support)
+	identities map[string]relayIdentity
+	relayNodes map[string]int
+	relayEntry bool
 
 	idCounter atomic.Int64
 
@@ -141,9 +145,12 @@ type ConnTracker struct {
 	globalLastUpdate time.Time
 }
 
+const globalDeviceStateTTL = 2 * time.Minute
+
 // NewConnTracker creates a tracker.
 func NewConnTracker(_ int) *ConnTracker {
 	return &ConnTracker{
+		traffic:       newTrafficTotals(),
 		users:         make(map[int]*userStats),
 		uuidMap:       make(map[string]int),
 		connMap:       make(map[string]net.Conn),
@@ -169,7 +176,7 @@ func (t *ConnTracker) SetUserMap(m map[string]int) {
 	t.uuidMap = m
 	for _, uid := range m {
 		if _, ok := t.users[uid]; !ok {
-			t.users[uid] = &userStats{ips: make(map[string]int)}
+			t.users[uid] = &userStats{userTraffic: t.traffic.user(uid), ips: make(map[string]int)}
 		}
 	}
 	t.usersMu.Unlock()
@@ -202,27 +209,32 @@ func (t *ConnTracker) ClearGlobalDevices() {
 
 // ─── adapter.ConnectionTracker ──────────────────────────────────────────────
 
+// RoutedFlow 对接 1.14 的三层转发接口。Node 的用户入站走 TCP/UDP 连接统计，
+// 三层转发没有对应的面板用户身份，不计入用户流量。
+func (t *ConnTracker) RoutedFlow(context.Context, adapter.InboundContext, adapter.Rule, adapter.Outbound) tun.FlowTracker {
+	return nil
+}
+
 // RoutedConnection wraps a TCP conn to count bytes per-user, track IPs,
 // and optionally rate-limit. Gate-keeps device limits at connection time.
 func (t *ConnTracker) RoutedConnection(
 	ctx context.Context, conn net.Conn,
 	metadata adapter.InboundContext,
-	_ adapter.Rule, _ adapter.Outbound,
+	_ adapter.Rule, outbound adapter.Outbound,
 ) net.Conn {
-	uuid := metadata.User
+	uuid, uid, us, relay, allowed := t.resolveUser(metadata.User, outbound)
+	if !allowed {
+		_ = conn.Close()
+		return conn
+	}
 	sourceIP := metadata.Source.Addr.String()
-
-	t.usersMu.RLock()
-	uid := t.uuidMap[uuid]
-	us := t.users[uid]
-	t.usersMu.RUnlock()
 
 	// Device limit gate-keeping
 	if dlf := t.deviceLimitFunc.Load(); dlf != nil {
 		if limit, hasLimit := (*dlf)(uuid); hasLimit {
 			if t.checkDeviceGate(us, uid, sourceIP, limit) {
 				nlog.Core().Info("singbox: device limit gate-keep, rejecting connection",
-					"user", uuid, "ip", sourceIP, "limit", limit)
+					"user_id", uid, "ip", sourceIP, "limit", limit)
 				conn.Close()
 				return conn
 			}
@@ -255,6 +267,7 @@ func (t *ConnTracker) RoutedConnection(
 		sourceIP: sourceIP,
 		limiter:  lim,
 		ctx:      ctx,
+		relay:    relay,
 	}
 }
 
@@ -265,22 +278,21 @@ func (t *ConnTracker) RoutedConnection(
 func (t *ConnTracker) RoutedPacketConnection(
 	ctx context.Context, conn N.PacketConn,
 	metadata adapter.InboundContext,
-	_ adapter.Rule, _ adapter.Outbound,
+	_ adapter.Rule, outbound adapter.Outbound,
 ) N.PacketConn {
-	uuid := metadata.User
+	uuid, uid, us, relay, allowed := t.resolveUser(metadata.User, outbound)
+	if !allowed {
+		_ = conn.Close()
+		return conn
+	}
 	sourceIP := metadata.Source.Addr.String()
-
-	t.usersMu.RLock()
-	uid := t.uuidMap[uuid]
-	us := t.users[uid]
-	t.usersMu.RUnlock()
 
 	// Device limit gate-keeping
 	if dlf := t.deviceLimitFunc.Load(); dlf != nil {
 		if limit, hasLimit := (*dlf)(uuid); hasLimit {
 			if t.checkDeviceGate(us, uid, sourceIP, limit) {
 				nlog.Core().Info("singbox: device limit gate-keep, rejecting UDP connection",
-					"user", uuid, "ip", sourceIP, "limit", limit)
+					"user_id", uid, "ip", sourceIP, "limit", limit)
 				conn.Close()
 				return conn
 			}
@@ -307,6 +319,7 @@ func (t *ConnTracker) RoutedPacketConnection(
 		sourceIP:   sourceIP,
 		limiter:    lim,
 		ctx:        ctx,
+		relay:      relay,
 	}
 }
 
@@ -332,7 +345,7 @@ func (t *ConnTracker) checkDeviceGate(us *userStats, userID int, sourceIP string
 
 	// Check global state freshness
 	t.globalMu.RLock()
-	globalStale := time.Since(t.globalLastUpdate) > 60*time.Second
+	globalStale := time.Since(t.globalLastUpdate) > globalDeviceStateTTL
 	globalIPs := t.globalDevices[userID]
 	t.globalMu.RUnlock()
 
@@ -567,6 +580,7 @@ type trackedConn struct {
 	limiter  *rate.Limiter
 	ctx      context.Context
 	closed   atomic.Bool
+	relay    relayCounters
 }
 
 func (c *trackedConn) Read(b []byte) (int, error) {
@@ -577,6 +591,7 @@ func (c *trackedConn) Read(b []byte) (int, error) {
 	}
 	n, err := c.Conn.Read(b)
 	if n > 0 {
+		c.relay.upload(int64(n))
 		if c.us != nil {
 			c.us.upload.Add(int64(n)) // 从入站读取 = 用户上传
 		}
@@ -625,6 +640,9 @@ func (c *trackedConn) Write(b []byte) (int, error) {
 	}
 
 	n, err := c.Conn.Write(b)
+	if n > 0 {
+		c.relay.download(int64(n))
+	}
 	if n > 0 && c.us != nil {
 		c.us.download.Add(int64(n)) // 向入站写入 = 用户下载
 	}
@@ -670,14 +688,14 @@ func (c *trackedConn) UnwrapReader() (io.Reader, []N.CountFunc) {
 	if c.us == nil {
 		return c.Conn, nil
 	}
-	return c.Conn, []N.CountFunc{c.makeCountFunc(&c.us.upload)} // 从入站读取 = 用户上传
+	return c.Conn, []N.CountFunc{c.makeCountFunc(&c.us.upload), c.relay.upload} // 从入站读取 = 用户上传
 }
 
 func (c *trackedConn) UnwrapWriter() (io.Writer, []N.CountFunc) {
 	if c.us == nil {
 		return c.Conn, nil
 	}
-	return c.Conn, []N.CountFunc{c.makeCountFunc(&c.us.download)} // 向入站写入 = 用户下载
+	return c.Conn, []N.CountFunc{c.makeCountFunc(&c.us.download), c.relay.download} // 向入站写入 = 用户下载
 }
 
 func (c *trackedConn) Upstream() any           { return c.Conn }
@@ -696,12 +714,14 @@ type trackedPacketConn struct {
 	limiter  *rate.Limiter
 	ctx      context.Context
 	closed   atomic.Bool
+	relay    relayCounters
 }
 
 func (c *trackedPacketConn) ReadPacket(buffer *buf.Buffer) (singM.Socksaddr, error) {
 	dest, err := c.PacketConn.ReadPacket(buffer)
 	if err == nil {
 		n := int64(buffer.Len())
+		c.relay.upload(n)
 		if c.us != nil {
 			c.us.upload.Add(n) // 从入站读取 = 用户上传
 		}
@@ -748,6 +768,9 @@ func (c *trackedPacketConn) WritePacket(buffer *buf.Buffer, dest singM.Socksaddr
 	}
 
 	err := c.PacketConn.WritePacket(buffer, dest)
+	if err == nil {
+		c.relay.download(n)
+	}
 	if err == nil && c.us != nil {
 		c.us.download.Add(n) // 向入站写入 = 用户下载
 	}
@@ -791,16 +814,18 @@ func (c *trackedPacketConn) UnwrapPacketReader() (N.PacketReader, []N.CountFunc)
 	if c.us == nil {
 		return c.PacketConn, nil
 	}
-	return c.PacketConn, []N.CountFunc{c.makeCountFunc(&c.us.download)}
+	return c.PacketConn, []N.CountFunc{c.makeCountFunc(&c.us.upload), c.relay.upload} // 从入站读取 = 用户上传
 }
 
 func (c *trackedPacketConn) UnwrapPacketWriter() (N.PacketWriter, []N.CountFunc) {
 	if c.us == nil {
 		return c.PacketConn, nil
 	}
-	return c.PacketConn, []N.CountFunc{c.makeCountFunc(&c.us.upload)}
+	return c.PacketConn, []N.CountFunc{c.makeCountFunc(&c.us.download), c.relay.download} // 向入站写入 = 用户下载
 }
 
 func (c *trackedPacketConn) Upstream() any           { return c.PacketConn }
 func (c *trackedPacketConn) ReaderReplaceable() bool { return true }
-func (c *trackedPacketConn) WriterReplaceable() bool { return true }
+
+// 1.14 的 UDP 写入解包会先检查此值；保留包装层，才能提取计数和限速回调。
+func (c *trackedPacketConn) WriterReplaceable() bool { return false }

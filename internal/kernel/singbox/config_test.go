@@ -498,7 +498,7 @@ func TestBuildConfig(t *testing.T) {
 		ServerPort: 111,
 		Cipher:     "aes-128-gcm",
 	}
-	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, kernel.TLSCert{})
+	cfg := mustBuildConfig(t, kcfg, testNodeSpec(nc), testUsers, kernel.TLSCert{})
 
 	data, err := json.Marshal(cfg)
 	if err != nil {
@@ -542,7 +542,7 @@ func TestBuildConfig_OutboundPriority(t *testing.T) {
 		},
 	}
 
-	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, kernel.TLSCert{})
+	cfg := mustBuildConfig(t, kcfg, testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	outbounds := cfg["outbounds"].([]M)
 
 	// We have 2 overrides in input, so we should have exactly 2 outbounds total
@@ -595,7 +595,7 @@ func TestBuildConfig_AllProtocols_ValidJSON(t *testing.T) {
 
 	for _, tc := range protocols {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := buildConfig(config.KernelConfig{LogLevel: "warn"}, testNodeSpec(tc.nc), testUsers, kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
+			cfg := mustBuildConfig(t, config.KernelConfig{LogLevel: "warn"}, testNodeSpec(tc.nc), testUsers, kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 			data, err := json.Marshal(cfg)
 			if err != nil {
 				t.Fatalf("marshal %s: %v", tc.name, err)

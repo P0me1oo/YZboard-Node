@@ -64,15 +64,16 @@ type Settings struct {
 
 // MachineNode is a single entry returned by GET /api/v2/server/machine/nodes.
 type MachineNode struct {
-	ID   int    `json:"id"`
-	Type string `json:"type"`
-	Name string `json:"name"`
+	ID         int    `json:"id"`
+	Type       string `json:"type"`
+	Name       string `json:"name"`
+	KernelType string `json:"kernel_type,omitempty"` // "xray" or "singbox"
 }
 
 // MachineNodesResponse is the response from GET /api/v2/server/machine/nodes.
 type MachineNodesResponse struct {
-	Nodes      []MachineNode      `json:"nodes"`
-	BaseConfig MachineBaseConfig  `json:"base_config"`
+	Nodes      []MachineNode     `json:"nodes"`
+	BaseConfig MachineBaseConfig `json:"base_config"`
 }
 
 // MachineBaseConfig holds polling intervals for machine mode.
@@ -143,6 +144,71 @@ type NodeConfig struct {
 
 	// Proxy Protocol (supports both top-level and networkSettings for compatibility)
 	AcceptProxyProtocol bool `json:"accept_proxy_protocol,omitempty"`
+
+	// Relay describes the transit topology (Xboard extension). Nil for plain nodes.
+	Relay *RelayConfig `json:"relay,omitempty"`
+}
+
+// Relay modes.
+const (
+	// RelayModeEntry marks the node clients actually connect to. It keeps its own
+	// client inbound and gains one internal outbound per logical node.
+	RelayModeEntry = "entry"
+	// RelayModeLanding marks a landing node. It only serves the internal inbound
+	// used by the entry server and never receives panel users.
+	RelayModeLanding = "landing"
+)
+
+// RelayConfig carries the transit topology for a node.
+type RelayConfig struct {
+	Mode string `json:"mode"`
+
+	// Entry-side fields.
+	RouteID  int          `json:"route_id,omitempty"`
+	Children []RelayChild `json:"children,omitempty"`
+
+	// Landing-side fields.
+	Protocol    string            `json:"protocol,omitempty"`
+	ListenPort  int               `json:"listen_port,omitempty"`
+	Cipher      string            `json:"cipher,omitempty"`
+	Password    string            `json:"password,omitempty"`
+	EntryNodeID int               `json:"entry_node_id,omitempty"`
+	VLESS       *RelayVLESSConfig `json:"vless,omitempty"`
+}
+
+// RelayChild is one logical node reachable through an internal outbound on the entry.
+type RelayChild struct {
+	NodeID   int               `json:"node_id"`
+	Tag      string            `json:"tag"`
+	RouteID  int               `json:"route_id"`
+	Protocol string            `json:"protocol"`
+	Address  string            `json:"address"`
+	Port     int               `json:"port"`
+	Cipher   string            `json:"cipher"`
+	Password string            `json:"password"`
+	VLESS    *RelayVLESSConfig `json:"vless,omitempty"`
+}
+
+// RelayVLESSConfig 保存内部链路身份，以及入口连接落地所需的客户端传输参数。
+// 服务端私密字段只保留在落地节点的顶层 NodeConfig，不会复制到入口 child。
+type RelayVLESSConfig struct {
+	ID              string                 `json:"id"`
+	Network         string                 `json:"network,omitempty"`
+	NetworkSettings map[string]interface{} `json:"network_settings,omitempty"`
+	TLS             int                    `json:"tls,omitempty"`
+	Flow            string                 `json:"flow,omitempty"`
+	Encryption      string                 `json:"encryption,omitempty"`
+	TLSSettings     map[string]interface{} `json:"tls_settings,omitempty"`
+	RealitySettings map[string]interface{} `json:"reality_settings,omitempty"`
+	TransportAuth   string                 `json:"transport_auth,omitempty"`
+}
+
+func (r *RelayConfig) IsEntry() bool {
+	return r != nil && r.Mode == RelayModeEntry
+}
+
+func (r *RelayConfig) IsLanding() bool {
+	return r != nil && r.Mode == RelayModeLanding
 }
 
 // GetProxyProtocol returns true if AcceptProxyProtocol is set either at node level

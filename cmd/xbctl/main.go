@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +19,9 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/cedar2025/xboard-node/internal/buildinfo"
 	"github.com/cedar2025/xboard-node/internal/config"
+	"github.com/cedar2025/xboard-node/internal/timesync"
 	"gopkg.in/yaml.v3"
 )
 
@@ -25,17 +29,14 @@ const (
 	defaultConfigPath      = "/etc/xboard-node/config.yml"
 	defaultMetaPath        = "/etc/xboard-node/install-meta.json"
 	defaultCredentialsPath = "/etc/xboard-node/credentials.env"
-	defaultBinaryPath      = "/usr/local/bin/xboard-node"
-	defaultCLIPath         = "/usr/local/bin/xbctl"
-	serviceName            = "xboard-node.service"
-	serviceFilePath        = "/etc/systemd/system/xboard-node.service"
 	defaultInstallRoot     = "/etc/xboard-node"
-	downloadBase           = "https://github.com/cedar2025/xboard-node/releases"
+	downloadBase           = "https://github.com/P0me1oo/YZboard-Node/releases"
 )
 
 var (
 	version   = "dev"
 	buildTime = "unknown"
+	commit    = "unknown"
 )
 
 type instanceRow struct {
@@ -48,28 +49,30 @@ type instanceRow struct {
 }
 
 type fileRootConfig struct {
-	Log       *fileLogConfig     `yaml:"log,omitempty"`
-	Kernel    *fileKernelConfig  `yaml:"kernel,omitempty"`
-	Node      *fileNodeConfig    `yaml:"node,omitempty"`
-	WS        *config.WSConfig   `yaml:"ws,omitempty"`
-	Runtime   *fileRuntimeConfig `yaml:"runtime,omitempty"`
-	Cert      *config.CertConfig `yaml:"cert,omitempty"`
-	Instances []fileInstance      `yaml:"instances,omitempty"`
+	Log       *fileLogConfig         `yaml:"log,omitempty"`
+	Kernel    *fileKernelConfig      `yaml:"kernel,omitempty"`
+	Node      *fileNodeConfig        `yaml:"node,omitempty"`
+	WS        *config.WSConfig       `yaml:"ws,omitempty"`
+	Runtime   *fileRuntimeConfig     `yaml:"runtime,omitempty"`
+	Cert      *config.CertConfig     `yaml:"cert,omitempty"`
+	TimeSync  *config.TimeSyncConfig `yaml:"time_sync,omitempty"`
+	Instances []fileInstance         `yaml:"instances,omitempty"`
 }
 
 type fileInstance struct {
-	ID         string             `yaml:"id,omitempty"`
-	Panel      filePanelConfig    `yaml:"panel"`
-	Node       *fileNodeConfig    `yaml:"node,omitempty"`
-	Kernel     fileKernelConfig   `yaml:"kernel"`
-	Log        fileLogConfig      `yaml:"log"`
-	Runtime    *fileRuntimeConfig `yaml:"runtime,omitempty"`
-	HealthPort int                `yaml:"health_port,omitempty"`
-	Machine    *fileMachineConfig `yaml:"machine,omitempty"`
-	Standalone map[string]any     `yaml:"standalone,omitempty"`
-	Cert       *config.CertConfig `yaml:"cert,omitempty"`
-	WS         *config.WSConfig   `yaml:"ws,omitempty"`
-	Nodes      []config.NodeEntry `yaml:"nodes,omitempty"`
+	ID         string                 `yaml:"id,omitempty"`
+	Panel      filePanelConfig        `yaml:"panel"`
+	Node       *fileNodeConfig        `yaml:"node,omitempty"`
+	Kernel     fileKernelConfig       `yaml:"kernel"`
+	Log        fileLogConfig          `yaml:"log"`
+	Runtime    *fileRuntimeConfig     `yaml:"runtime,omitempty"`
+	HealthPort int                    `yaml:"health_port,omitempty"`
+	Machine    *fileMachineConfig     `yaml:"machine,omitempty"`
+	Standalone map[string]any         `yaml:"standalone,omitempty"`
+	Cert       *config.CertConfig     `yaml:"cert,omitempty"`
+	WS         *config.WSConfig       `yaml:"ws,omitempty"`
+	TimeSync   *config.TimeSyncConfig `yaml:"time_sync,omitempty"`
+	Nodes      []config.NodeEntry     `yaml:"nodes,omitempty"`
 }
 
 type filePanelConfig struct {
@@ -92,13 +95,14 @@ type fileNodeConfig struct {
 }
 
 type fileKernelConfig struct {
-	Type         string           `yaml:"type"`
-	ConfigDir    string           `yaml:"config_dir"`
-	LogLevel     string           `yaml:"log_level,omitempty"`
-	GeoDataDir   string           `yaml:"geo_data_dir,omitempty"`
-	CustomConfig string           `yaml:"custom_config,omitempty"`
-	CustomRoute  []map[string]any `yaml:"custom_route,omitempty"`
-	CustomOut    []map[string]any `yaml:"custom_outbound,omitempty"`
+	Type                string           `yaml:"type"`
+	ConfigDir           string           `yaml:"config_dir"`
+	LogLevel            string           `yaml:"log_level,omitempty"`
+	GeoDataDir          string           `yaml:"geo_data_dir,omitempty"`
+	CustomConfig        string           `yaml:"custom_config,omitempty"`
+	CustomRoute         []map[string]any `yaml:"custom_route,omitempty"`
+	CustomOut           []map[string]any `yaml:"custom_outbound,omitempty"`
+	RealityMinClientVer string           `yaml:"reality_min_client_ver,omitempty"`
 }
 
 type fileLogConfig struct {
@@ -166,6 +170,8 @@ func run(args []string) error {
 		return runService([]string{"logs"})
 	case "health":
 		return runHealth()
+	case "doctor":
+		return runDoctor(args[1:])
 	case "bind":
 		return runBind(args[1:])
 	case "bind-node":
@@ -183,7 +189,7 @@ func run(args []string) error {
 	case "uninstall":
 		return runUninstall(args[1:])
 	case "version", "-v", "--version":
-		fmt.Printf("xbctl %s (built %s)\n", version, buildTime)
+		fmt.Println(buildinfo.Report("xbctl", version, buildTime, commit))
 		return nil
 	case "config":
 		return runConfig(args[1:])
@@ -204,8 +210,11 @@ func printUsage() {
   xbctl instance get <id> [--output text|json]
   xbctl config init --mode node|machine --panel-url URL --token TOKEN [flags]
   xbctl config health-port [--config PATH]
+  xbctl config bin-dir [--path-file PATH]
+  xbctl config kernel <xray|singbox> [--instance ID] [--config PATH] [--force]
   xbctl service status|start|stop|restart|enable|disable|logs
   xbctl health
+  xbctl doctor time [--config PATH] [--output text|json]
   xbctl bind add-node --panel-url URL --token TOKEN --node-id ID [--node-type TYPE] [--kernel singbox|xray]
   xbctl bind add-machine --panel-url URL --token TOKEN --machine-id ID [--kernel singbox|xray]
   xbctl bind remove <instance-id>
@@ -234,9 +243,12 @@ func runStatus() error {
 		ver = meta.Version
 	}
 	fmt.Printf("  version:  %s\n", ver)
+	if paths, err := loadInstallPaths(defaultBinDirFile); err == nil {
+		fmt.Printf("  bin-dir:  %s\n", paths.binDir)
+	}
 
 	// Service status
-	svc := systemctlState()
+	svc := serviceState()
 	fmt.Printf("  service:  %s\n", svc)
 
 	// Health
@@ -293,21 +305,7 @@ func runService(args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: xbctl service <status|start|stop|restart|enable|disable|logs>")
 	}
-	sub := args[0]
-	rest := args[1:]
-	switch sub {
-	case "status":
-		return runCommand("sudo", append([]string{"systemctl", "status", serviceName, "--no-pager"}, rest...)...)
-	case "start", "stop", "restart", "enable", "disable":
-		return runCommand("sudo", append([]string{"systemctl", sub, serviceName}, rest...)...)
-	case "logs":
-		if len(rest) == 0 {
-			rest = []string{"-f"}
-		}
-		return runCommand("sudo", append([]string{"journalctl", "-u", serviceName}, rest...)...)
-	default:
-		return fmt.Errorf("unknown service command: %s", sub)
-	}
+	return runDetectedManagedService(args[0], os.Geteuid() != 0, args[1:]...)
 }
 
 func runHealth() error {
@@ -316,6 +314,136 @@ func runHealth() error {
 	if h == "down" {
 		return errors.New("health check failed")
 	}
+	return nil
+}
+
+type timeDoctorResult struct {
+	ConfiguredEnabled bool              `json:"configured_enabled"`
+	Servers           []string          `json:"servers"`
+	Probe             timesync.Snapshot `json:"probe"`
+}
+
+func runDoctor(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: xbctl doctor time [--config PATH] [--output text|json]")
+	}
+	switch args[0] {
+	case "time":
+		return runDoctorTime(args[1:])
+	default:
+		return fmt.Errorf("unknown doctor command: %s", args[0])
+	}
+}
+
+func runDoctorTime(args []string) error {
+	configPath := defaultConfigPath
+	output := "text"
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--config":
+			if i+1 >= len(args) {
+				return errors.New("--config requires a path")
+			}
+			i++
+			configPath = args[i]
+		case "--output":
+			if i+1 >= len(args) {
+				return errors.New("--output requires text or json")
+			}
+			i++
+			output = strings.ToLower(strings.TrimSpace(args[i]))
+			if output != "text" && output != "json" {
+				return fmt.Errorf("output must be text or json, got %q", output)
+			}
+		default:
+			return fmt.Errorf("unknown doctor time flag: %s", args[i])
+		}
+	}
+
+	timeConfig, configuredEnabled, err := loadDoctorTimeConfig(configPath)
+	if err != nil {
+		return err
+	}
+	// doctor 始终执行只读探测，即使运行时自动校准被显式关闭。
+	probeEnabled := true
+	timeConfig.Enabled = &probeEnabled
+	manager := timesync.New(timeConfig)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeConfig.Timeout+1)*time.Second)
+	defer cancel()
+	snapshot, probeErr := manager.Check(ctx)
+	result := timeDoctorResult{
+		ConfiguredEnabled: configuredEnabled,
+		Servers:           append([]string(nil), timeConfig.Servers...),
+		Probe:             snapshot,
+	}
+	if err := printTimeDoctor(os.Stdout, output, result); err != nil {
+		return err
+	}
+	if probeErr != nil {
+		return fmt.Errorf("time check failed: %w", probeErr)
+	}
+	if snapshot.Status != timesync.StatusNormal {
+		return fmt.Errorf("time check status is %s (offset %d ms)", snapshot.Status, snapshot.OffsetMS)
+	}
+	return nil
+}
+
+func loadDoctorTimeConfig(path string) (config.TimeSyncConfig, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return config.TimeSyncConfig{}, false, fmt.Errorf("read config: %w", err)
+	}
+	root := &config.RootConfig{}
+	if err := yaml.Unmarshal(data, root); err != nil {
+		return config.TimeSyncConfig{}, false, fmt.Errorf("parse config: %w", err)
+	}
+	if len(root.Instances) == 0 {
+		resolved := config.ResolveTimeSync(root.Config.TimeSync, config.TimeSyncConfig{})
+		if err := config.ValidateTimeSync(resolved); err != nil {
+			return config.TimeSyncConfig{}, false, err
+		}
+		return resolved, resolved.IsEnabled(), nil
+	}
+	resolved := config.ResolveTimeSync(root.Instances[0].TimeSync, root.Config.TimeSync)
+	if err := config.ValidateTimeSync(resolved); err != nil {
+		return config.TimeSyncConfig{}, false, err
+	}
+	for i := 1; i < len(root.Instances); i++ {
+		other := config.ResolveTimeSync(root.Instances[i].TimeSync, root.Config.TimeSync)
+		if err := config.ValidateTimeSync(other); err != nil {
+			return config.TimeSyncConfig{}, false, fmt.Errorf("instances[%d]: %w", i, err)
+		}
+		if !resolved.Equal(other) {
+			return config.TimeSyncConfig{}, false, fmt.Errorf("time_sync differs between instances[0] and instances[%d]", i)
+		}
+	}
+	return resolved, resolved.IsEnabled(), nil
+}
+
+func printTimeDoctor(w io.Writer, output string, result timeDoctorResult) error {
+	if output == "json" {
+		encoder := json.NewEncoder(w)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(result)
+	}
+	configured := "enabled"
+	if !result.ConfiguredEnabled {
+		configured = "disabled"
+	}
+	fmt.Fprintln(w, "time sync doctor")
+	fmt.Fprintf(w, "  configured: %s\n", configured)
+	fmt.Fprintf(w, "  status:     %s\n", result.Probe.Status)
+	fmt.Fprintf(w, "  offset:     %d ms\n", result.Probe.OffsetMS)
+	if result.Probe.Source != "" {
+		fmt.Fprintf(w, "  source:     %s\n", result.Probe.Source)
+	}
+	if result.Probe.LastSuccess != nil {
+		fmt.Fprintf(w, "  checked_at: %s\n", result.Probe.LastSuccess.UTC().Format(time.RFC3339))
+	}
+	if result.Probe.LastError != "" {
+		fmt.Fprintf(w, "  error:      %s\n", result.Probe.LastError)
+	}
+	fmt.Fprintf(w, "  servers:    %s\n", strings.Join(result.Servers, ", "))
 	return nil
 }
 
@@ -374,7 +502,7 @@ func runBindAdd(mode string, args []string) error {
 	}
 	// Restart service to pick up new config
 	fmt.Println("Restarting service...")
-	if err := runCommand("systemctl", "restart", serviceName); err != nil {
+	if err := runDetectedManagedService("restart", false); err != nil {
 		return fmt.Errorf("service restart failed: %w", err)
 	}
 	fmt.Println("Binding added successfully")
@@ -385,133 +513,62 @@ func runUpgrade(args []string) error {
 	if err := ensureRoot("upgrade"); err != nil {
 		return err
 	}
-
-	version := "latest"
+	release := "latest"
 	for i := 0; i < len(args); i++ {
-		if args[i] == "--version" && i+1 < len(args) {
-			version = args[i+1]
-			i++
+		if args[i] != "--version" || i+1 >= len(args) || args[i+1] == "" {
+			return errors.New("usage: xbctl upgrade [--version VERSION]; change the binary directory with install.sh upgrade --bin-dir PATH")
 		}
+		i++
+		release = args[i]
+	}
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		return fmt.Errorf("unsupported architecture: %s", runtime.GOARCH)
+	}
+	unlock, err := lockInstallation(defaultInstallRoot)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	paths, err := loadInstallPaths(defaultBinDirFile)
+	if err != nil {
+		return err
+	}
+	manager, err := detectServiceManager()
+	if err != nil {
+		return err
 	}
 
-	arch := runtime.GOARCH
-	if arch != "amd64" && arch != "arm64" {
-		return fmt.Errorf("unsupported architecture: %s", arch)
-	}
-
-	fmt.Println("Starting upgrade...")
-
-	binaryDir := filepath.Dir(defaultBinaryPath)
-	cliDir := filepath.Dir(defaultCLIPath)
-	newBinary := filepath.Join(binaryDir, ".xboard-node.new")
-	newCLI := filepath.Join(cliDir, ".xbctl.new")
-
-	binaryURL := resolveDownloadURL(fmt.Sprintf("xboard-node-linux-%s", arch), version)
-	cliURL := resolveDownloadURL(fmt.Sprintf("xbctl-linux-%s", arch), version)
-
-	fmt.Printf("Downloading %s...\n", binaryURL)
-	if err := downloadFile(binaryURL, newBinary); err != nil {
-		return fmt.Errorf("download binary: %w", err)
-	}
-
-	fmt.Printf("Downloading %s...\n", cliURL)
-	if err := downloadFile(cliURL, newCLI); err != nil {
-		os.Remove(newBinary)
-		return fmt.Errorf("download xbctl: %w", err)
-	}
-
-	if err := os.Chmod(newBinary, 0o755); err != nil {
-		return cleanupFiles(newBinary, newCLI, fmt.Errorf("chmod binary: %w", err))
-	}
-	if err := os.Chmod(newCLI, 0o755); err != nil {
-		return cleanupFiles(newBinary, newCLI, fmt.Errorf("chmod xbctl: %w", err))
-	}
-
-	// Validate downloaded binaries
-	if out, err := exec.Command(newBinary, "-v").CombinedOutput(); err != nil {
-		return cleanupFiles(newBinary, newCLI, fmt.Errorf("binary version check failed: %s", string(out)))
-	}
-	if out, err := exec.Command(newCLI, "version").CombinedOutput(); err != nil {
-		return cleanupFiles(newBinary, newCLI, fmt.Errorf("xbctl version check failed: %s", string(out)))
-	}
-
-	// Backup existing binaries
-	backupBinary := defaultBinaryPath + ".bak"
-	backupCLI := defaultCLIPath + ".bak"
-	// Backup existing binaries
-	if fileExists(defaultBinaryPath) {
-		if err := copyFile(defaultBinaryPath, backupBinary); err != nil {
-			return cleanupFiles(newBinary, newCLI, fmt.Errorf("backup binary: %w", err))
-		}
-	}
-	if fileExists(defaultCLIPath) {
-		if err := copyFile(defaultCLIPath, backupCLI); err != nil {
-			return cleanupFiles(newBinary, newCLI, fmt.Errorf("backup xbctl: %w", err))
-		}
-	}
-
-	// Atomic rename
-	if err := os.Rename(newBinary, defaultBinaryPath); err != nil {
-		return cleanupFiles(newBinary, newCLI, fmt.Errorf("replace binary: %w", err))
-	}
-	if err := os.Rename(newCLI, defaultCLIPath); err != nil {
-		if fileExists(backupBinary) {
-			os.Rename(backupBinary, defaultBinaryPath)
-		}
-		os.Remove(newCLI)
-		return fmt.Errorf("replace xbctl: %w", err)
-	}
-
-	// Recreate /usr/bin/xbctl symlink
-	os.Remove("/usr/bin/xbctl")
-	os.Symlink(defaultCLIPath, "/usr/bin/xbctl")
-
-	// Restart service
-	fmt.Println("Restarting service...")
-	runCommand("systemctl", "daemon-reload")
-	if err := runCommand("systemctl", "restart", serviceName); err != nil {
-		fmt.Println("Restart failed, rolling back...")
-		rollbackOK := true
-		if fileExists(backupBinary) {
-			if e := os.Rename(backupBinary, defaultBinaryPath); e != nil {
-				fmt.Printf("Warning: rollback binary failed: %v\n", e)
-				rollbackOK = false
+	fmt.Printf("Starting upgrade in %s...\n", paths.binDir)
+	newVer, err := upgradeBinaries(paths, release, upgradeOperations{
+		download: func(url, destination string) error {
+			fmt.Printf("Downloading %s...\n", url)
+			return downloadFile(url, destination)
+		},
+		run: func(file string, args ...string) ([]byte, error) {
+			return exec.Command(file, args...).CombinedOutput()
+		},
+		restart: func() error {
+			fmt.Println("Restarting service...")
+			if err := reloadServiceManager(manager); err != nil {
+				return err
 			}
-		}
-		if fileExists(backupCLI) {
-			if e := os.Rename(backupCLI, defaultCLIPath); e != nil {
-				fmt.Printf("Warning: rollback xbctl failed: %v\n", e)
-				rollbackOK = false
-			}
-		}
-		runCommand("systemctl", "daemon-reload")
-		if e := runCommand("systemctl", "restart", serviceName); e != nil {
-			return fmt.Errorf("upgrade and rollback restart both failed: %w", e)
-		}
-		if rollbackOK {
-			return errors.New("upgrade failed: service restart failed, rolled back successfully")
-		}
-		return errors.New("upgrade failed: partial rollback, check binary state manually")
+			return runManagedService(manager, "restart", false)
+		},
+		rename: os.Rename,
+	})
+	if err != nil {
+		return err
 	}
 
-	// Clean up backups
-	os.Remove(backupBinary)
-	os.Remove(backupCLI)
-
-	// Update install-meta.json
-	newVer := "unknown"
-	if out, err := exec.Command(defaultBinaryPath, "-v").CombinedOutput(); err == nil {
-		newVer = strings.TrimSpace(string(out))
-	}
 	if root, err := loadWritableRootConfig(defaultConfigPath); err == nil {
 		instances, _ := root.NormalizeInstances()
-		writeInstallMetaVersioned(defaultMetaPath, root, newVer, latestInstanceID(instances))
+		if err := writeInstallMetaVersioned(defaultMetaPath, root, newVer, latestInstanceID(instances)); err != nil {
+			fmt.Printf("Warning: update install metadata failed: %v\n", err)
+		}
 	}
-
 	fmt.Printf("Upgrade complete (version: %s)\n", newVer)
 	return nil
 }
-
 func runUninstall(args []string) error {
 	if err := ensureRoot("uninstall"); err != nil {
 		return err
@@ -539,24 +596,41 @@ func runUninstall(args []string) error {
 	}
 
 	var warnings []string
+	unlock, err := lockInstallation(defaultInstallRoot)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	paths, err := loadInstallPaths(defaultBinDirFile)
+	if err != nil {
+		return err
+	}
+
+	manager, managerErr := detectServiceManager()
+	if managerErr != nil {
+		return managerErr
+	}
+	serviceFilePath, pathErr := serviceFilePathFor(manager)
+	if pathErr != nil {
+		return pathErr
+	}
 
 	// Stop and disable service
 	if fileExists(serviceFilePath) {
-		if err := runCommand("systemctl", "stop", serviceName); err != nil {
+		if err := runManagedService(manager, "stop", false); err != nil {
 			warnings = append(warnings, fmt.Sprintf("stop service: %v", err))
 		}
-		if err := runCommand("systemctl", "disable", serviceName); err != nil {
+		if err := runManagedService(manager, "disable", false); err != nil {
 			warnings = append(warnings, fmt.Sprintf("disable service: %v", err))
 		}
 		if err := os.Remove(serviceFilePath); err != nil {
 			warnings = append(warnings, fmt.Sprintf("remove service file: %v", err))
 		}
-		runCommand("systemctl", "daemon-reload")
+		reloadServiceManager(manager)
 	}
 
-	// Remove binaries
-	// Remove binaries and symlinks
-	for _, p := range []string{defaultBinaryPath, defaultCLIPath, "/usr/bin/xbctl"} {
+	// 仅删除已登记目录中的程序和管理入口，不删除用户选择的目录。
+	for _, p := range []string{paths.binary(), paths.cli(), "/usr/bin/xbctl", defaultBinDirFile} {
 		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 			warnings = append(warnings, fmt.Sprintf("remove %s: %v", p, err))
 		}
@@ -613,28 +687,60 @@ func downloadFile(url, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
-func cleanupFiles(a, b string, err error) error {
-	os.Remove(a)
-	os.Remove(b)
-	return err
+func verifyReleaseChecksum(path, artifact string, checksums []byte) error {
+	var expected string
+	for _, line := range strings.Split(string(checksums), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.TrimPrefix(fields[1], "*")
+		if name == artifact {
+			expected = fields[0]
+			break
+		}
+	}
+	if len(expected) != 64 {
+		return fmt.Errorf("checksum for %s is missing or invalid", artifact)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %s for checksum: %w", artifact, err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("checksum %s: %w", artifact, err)
+	}
+	actual := fmt.Sprintf("%x", h.Sum(nil))
+	if !strings.EqualFold(actual, expected) {
+		return fmt.Errorf("checksum mismatch for %s", artifact)
+	}
+	return nil
+}
+
+func installedVersion(requested string, report []byte) string {
+	if requested != "" && requested != "latest" {
+		return requested
+	}
+	fields := strings.Fields(string(report))
+	if len(fields) >= 2 {
+		return fields[1]
+	}
+	return "unknown"
 }
 
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(dst, data, 0o755)
 }
 
 func runCommand(name string, args ...string) error {
@@ -782,7 +888,7 @@ func removeBinding(panelURL string, nodeID int, machineID int, instanceID string
 		if err := writeInstallMeta(defaultMetaPath, root); err != nil {
 			return err
 		}
-		runCommand("systemctl", "stop", serviceName)
+		runDetectedManagedService("stop", false)
 		fmt.Printf("removed %d binding(s)\n", len(removed))
 		fmt.Println("All bindings removed. Service stopped.")
 		fmt.Println("Use 'xbctl bind add-node/add-machine' to add a new binding, or 'xbctl uninstall' to fully uninstall.")
@@ -800,7 +906,7 @@ func removeBinding(panelURL string, nodeID int, machineID int, instanceID string
 	if err := writeInstallMeta(defaultMetaPath, root); err != nil {
 		return err
 	}
-	if err := runCommand("systemctl", "restart", serviceName); err != nil {
+	if err := runDetectedManagedService("restart", false); err != nil {
 		return err
 	}
 	fmt.Printf("removed %d binding(s)\n", len(removed))
@@ -849,8 +955,12 @@ func writeRootConfig(path string, root *config.RootConfig) error {
 	if p.Log.Level != "" || p.Log.Output != "" {
 		out.Log = &fileLogConfig{Level: p.Log.Level, Output: p.Log.Output}
 	}
-	if p.Kernel.Type != "" || p.Kernel.LogLevel != "" {
-		out.Kernel = &fileKernelConfig{Type: p.Kernel.Type, LogLevel: p.Kernel.LogLevel}
+	if p.Kernel.Type != "" || p.Kernel.LogLevel != "" || p.Kernel.RealityMinClientVer != "" {
+		out.Kernel = &fileKernelConfig{
+			Type:                p.Kernel.Type,
+			LogLevel:            p.Kernel.LogLevel,
+			RealityMinClientVer: p.Kernel.RealityMinClientVer,
+		}
 	}
 	if p.Node.PushInterval != 0 || p.Node.PullInterval != 0 || p.Node.TrackInterval != 0 || p.Node.DeviceReportInterval != 0 {
 		out.Node = &fileNodeConfig{
@@ -869,6 +979,9 @@ func writeRootConfig(path string, root *config.RootConfig) error {
 	if p.Cert.CertMode != "" || p.Cert.Domain != "" || p.Cert.CertFile != "" || p.Cert.AutoTLS {
 		out.Cert = &p.Cert
 	}
+	if hasTimeSyncConfig(p.TimeSync) {
+		out.TimeSync = &p.TimeSync
+	}
 
 	for _, inst := range instances {
 		fi := fileInstance{
@@ -880,13 +993,14 @@ func writeRootConfig(path string, root *config.RootConfig) error {
 				NodeType: inst.Panel.NodeType,
 			},
 			Kernel: fileKernelConfig{
-				Type:         inst.Kernel.Type,
-				ConfigDir:    inst.Kernel.ConfigDir,
-				LogLevel:     inst.Kernel.LogLevel,
-				GeoDataDir:   inst.Kernel.GeoDataDir,
-				CustomConfig: inst.Kernel.CustomConfig,
-				CustomRoute:  inst.Kernel.CustomRoute,
-				CustomOut:    inst.Kernel.CustomOutbound,
+				Type:                inst.Kernel.Type,
+				ConfigDir:           inst.Kernel.ConfigDir,
+				LogLevel:            inst.Kernel.LogLevel,
+				GeoDataDir:          inst.Kernel.GeoDataDir,
+				CustomConfig:        inst.Kernel.CustomConfig,
+				CustomRoute:         inst.Kernel.CustomRoute,
+				CustomOut:           inst.Kernel.CustomOutbound,
+				RealityMinClientVer: inst.Kernel.RealityMinClientVer,
 			},
 			Log: fileLogConfig{
 				Level:  inst.Log.Level,
@@ -922,6 +1036,9 @@ func writeRootConfig(path string, root *config.RootConfig) error {
 		if inst.WS.StatusInterval != 0 || inst.WS.HandshakeTimeout != 0 || inst.WS.BackoffInitial != 0 {
 			fi.WS = &inst.WS
 		}
+		if hasTimeSyncConfig(inst.TimeSync) {
+			fi.TimeSync = &inst.TimeSync
+		}
 		if len(inst.Nodes) > 0 {
 			fi.Nodes = inst.Nodes
 		}
@@ -932,6 +1049,11 @@ func writeRootConfig(path string, root *config.RootConfig) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 	return os.WriteFile(path, data, 0o600)
+}
+
+func hasTimeSyncConfig(cfg config.TimeSyncConfig) bool {
+	return cfg.Enabled != nil || len(cfg.Servers) > 0 || cfg.Interval != 0 || cfg.Timeout != 0 ||
+		cfg.WarnOffset != 0 || cfg.ErrorOffset != 0 || cfg.CriticalOffset != 0
 }
 
 func pruneCredentialKeys(path string, removed []config.Config) error {
@@ -1004,7 +1126,7 @@ func collectRowsFromMeta() ([]instanceRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	serviceStatus := systemctlState()
+	serviceStatus := serviceState()
 	healthStatus := healthStatus()
 	rows := make([]instanceRow, 0, len(meta.Instances))
 	for _, inst := range meta.Instances {
@@ -1030,7 +1152,7 @@ func collectRowsFromConfig() ([]instanceRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	serviceStatus := systemctlState()
+	serviceStatus := serviceState()
 	healthStatus := healthStatus()
 	rows := make([]instanceRow, 0, len(instances))
 	for _, inst := range instances {
@@ -1066,19 +1188,6 @@ func printRows(rows []instanceRow, output string) error {
 	tw.Flush()
 	_, err := fmt.Print(buf.String())
 	return err
-}
-
-func systemctlState() string {
-	cmd := exec.Command("systemctl", "is-active", serviceName)
-	out, err := cmd.CombinedOutput()
-	state := strings.TrimSpace(string(out))
-	if state != "" {
-		return state
-	}
-	if err != nil {
-		return "unknown"
-	}
-	return state
 }
 
 func healthStatus() string {
@@ -1154,31 +1263,6 @@ func latestInstanceID(instances []*config.Config) string {
 	return ""
 }
 
-func regenerateServiceFile() error {
-	unit := fmt.Sprintf(`[Unit]
-Description=Xboard Node Backend
-Documentation=https://github.com/cedar2025/xboard-node
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=%s
-EnvironmentFile=-%s
-ExecStart=%s -c %s
-Restart=always
-RestartSec=5
-LimitNOFILE=1048576
-NoNewPrivileges=true
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-`, defaultInstallRoot, defaultCredentialsPath, defaultBinaryPath, defaultConfigPath)
-	return os.WriteFile(serviceFilePath, []byte(unit), 0o644)
-}
-
 func machineIDPtr(cfg *config.Config) *int {
 	if cfg.Machine == nil || cfg.Machine.MachineID <= 0 {
 		return nil
@@ -1191,16 +1275,207 @@ func machineIDPtr(cfg *config.Config) *int {
 
 func runConfig(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: xbctl config <init|health-port>")
+		return errors.New("usage: xbctl config <init|health-port|kernel|refresh-meta|bin-dir>")
 	}
 	switch args[0] {
 	case "init":
 		return runConfigInit(args[1:])
 	case "health-port":
 		return runConfigHealthPort(args[1:])
+	case "kernel":
+		return runConfigKernel(args[1:])
+	case "refresh-meta":
+		return runConfigRefreshMeta(args[1:])
+	case "bin-dir":
+		return runConfigBinDir(args[1:])
 	default:
 		return fmt.Errorf("unknown config command: %s", args[0])
 	}
+}
+
+// xrayUnsupportedInbounds lists inbound protocols that only sing-box can serve.
+// Switching such a node to xray leaves it without an inbound, so the switch is
+// refused unless the caller passes --force.
+var xrayUnsupportedInbounds = map[string]bool{
+	"tuic":   true,
+	"naive":  true,
+	"anytls": true,
+	"mieru":  true,
+	"socks":  true,
+	"http":   true,
+}
+
+// readInstanceIDs returns the instance ids in file order. config.Config skips
+// the id field when unmarshalling, so it has to be read separately.
+func readInstanceIDs(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var parsed struct {
+		Instances []struct {
+			ID string `yaml:"id"`
+		} `yaml:"instances"`
+	}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(parsed.Instances))
+	for _, inst := range parsed.Instances {
+		ids = append(ids, inst.ID)
+	}
+	return ids
+}
+
+// runConfigKernel switches instances between the xray and sing-box kernels.
+//
+// Without --instance every instance is updated; the command reports what it
+// changed and leaves restarting the service to the caller.
+func runConfigKernel(args []string) error {
+	cfgPath := defaultConfigPath
+	target := ""
+	instanceID := ""
+	force := false
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--config":
+			if i+1 >= len(args) {
+				return errors.New("--config requires a path")
+			}
+			i++
+			cfgPath = args[i]
+		case "--instance":
+			if i+1 >= len(args) {
+				return errors.New("--instance requires an instance id")
+			}
+			i++
+			instanceID = args[i]
+		case "--force":
+			force = true
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				return fmt.Errorf("unknown flag: %s", args[i])
+			}
+			if target != "" {
+				return errors.New("kernel type given more than once")
+			}
+			target = args[i]
+		}
+	}
+
+	switch strings.ToLower(strings.TrimSpace(target)) {
+	case "xray":
+		target = "xray"
+	case "singbox", "sing-box":
+		target = "singbox"
+	case "":
+		return errors.New("usage: xbctl config kernel <xray|singbox> [--instance ID] [--config PATH] [--force]")
+	default:
+		return fmt.Errorf("kernel must be xray or singbox, got %q", target)
+	}
+
+	root, err := loadWritableRootConfig(cfgPath)
+	if err != nil {
+		return err
+	}
+	instances := normalizeRootInstances(root)
+	if len(instances) == 0 {
+		return fmt.Errorf("no instance found in %s", cfgPath)
+	}
+
+	// InstanceID is yaml:"-", so it is empty after loading. Recover the ids the
+	// file actually carries; otherwise --instance never matches and writing back
+	// would rename or drop them. Only fall back to the derived id when the file
+	// has none.
+	fileIDs := readInstanceIDs(cfgPath)
+	for i := range instances {
+		if i < len(fileIDs) && fileIDs[i] != "" {
+			instances[i].InstanceID = fileIDs[i]
+			continue
+		}
+		if autoID, idErr := instances[i].AutoInstanceID(); idErr == nil {
+			instances[i].InstanceID = autoID
+		}
+	}
+
+	matched := 0
+	changed := 0
+	for i := range instances {
+		if instanceID != "" && instances[i].InstanceID != instanceID {
+			continue
+		}
+		matched++
+
+		nodeType := strings.ToLower(strings.TrimSpace(instances[i].Panel.NodeType))
+		if target == "xray" && nodeType != "" && xrayUnsupportedInbounds[nodeType] && !force {
+			return fmt.Errorf(
+				"instance %s serves %q, which the xray kernel cannot host; pass --force to switch anyway",
+				instances[i].InstanceID, nodeType,
+			)
+		}
+
+		from := instances[i].Kernel.Type
+		if from == "" {
+			from = "xray"
+		}
+		if from == target {
+			fmt.Printf("%s: already %s\n", instances[i].InstanceID, target)
+			continue
+		}
+		instances[i].Kernel.Type = target
+		changed++
+		fmt.Printf("%s: %s -> %s\n", instances[i].InstanceID, from, target)
+	}
+
+	if matched == 0 {
+		return fmt.Errorf("instance %q not found in %s", instanceID, cfgPath)
+	}
+	if changed == 0 {
+		return nil
+	}
+
+	root.Instances = instances
+	if err := writeRootConfig(cfgPath, root); err != nil {
+		return err
+	}
+	fmt.Printf("updated %d instance(s) in %s\n", changed, cfgPath)
+	fmt.Println("restart the service to apply: xbctl service restart")
+	return nil
+}
+
+func runConfigRefreshMeta(args []string) error {
+	configPath := defaultConfigPath
+	metaPath := defaultMetaPath
+	releaseVersion := ""
+	for i := 0; i < len(args); i++ {
+		if i+1 >= len(args) {
+			break
+		}
+		switch args[i] {
+		case "--config":
+			i++
+			configPath = args[i]
+		case "--meta":
+			i++
+			metaPath = args[i]
+		case "--version":
+			i++
+			releaseVersion = args[i]
+		}
+	}
+	if strings.TrimSpace(releaseVersion) == "" {
+		return errors.New("--version is required")
+	}
+	root, err := loadWritableRootConfig(configPath)
+	if err != nil {
+		return err
+	}
+	instances, err := root.NormalizeInstances()
+	if err != nil {
+		return err
+	}
+	return writeInstallMetaVersioned(metaPath, root, releaseVersion, latestInstanceID(instances))
 }
 
 // runConfigInit generates/merges an instance into config.yml, writes

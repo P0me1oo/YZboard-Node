@@ -240,6 +240,94 @@ func TestPushStatus_Success(t *testing.T) {
 	}
 }
 
+func TestReportIncludesBatchID(t *testing.T) {
+	var received map[string]interface{}
+	ts, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/server/report" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Errorf("decode report: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	defer ts.Close()
+
+	err := client.Report(
+		"boot-1-1",
+		map[int][2]int64{1: {10, 20}},
+		map[int][2]int64{7: {30, 40}},
+		map[int]map[int][2]int64{1: {7: {5, 6}}},
+		map[int][]string{1: {"192.0.2.10"}},
+		map[int]int{1: 1},
+		1.5,
+		[2]uint64{100, 50},
+		[2]uint64{0, 0},
+		[2]uint64{1000, 500},
+		map[string]interface{}{"kernel_status": true},
+	)
+	if err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	if got := received["report_id"]; got != "boot-1-1" {
+		t.Fatalf("report_id = %v, want boot-1-1", got)
+	}
+	relay, ok := received["relay_traffic"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("relay_traffic missing or wrong type: %#v", received["relay_traffic"])
+	}
+	if _, ok := relay["7"]; !ok {
+		t.Fatalf("relay_traffic missing node 7: %#v", relay)
+	}
+	relayUser, ok := received["relay_user_traffic"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("relay_user_traffic missing or wrong type: %#v", received["relay_user_traffic"])
+	}
+	user, ok := relayUser["1"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("relay_user_traffic missing user 1: %#v", relayUser)
+	}
+	if _, ok := user["7"]; !ok {
+		t.Fatalf("relay_user_traffic missing node 7: %#v", user)
+	}
+}
+
+func TestReportIncludesExplicitEmptySnapshots(t *testing.T) {
+	var received map[string]interface{}
+	ts, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Errorf("decode report: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	defer ts.Close()
+
+	if err := client.Report(
+		"boot-1-2",
+		nil,
+		nil,
+		nil,
+		map[int][]string{},
+		map[int]int{},
+		0,
+		[2]uint64{},
+		[2]uint64{},
+		[2]uint64{},
+		nil,
+	); err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	if alive, ok := received["alive"].(map[string]interface{}); !ok || len(alive) != 0 {
+		t.Fatalf("alive = %#v, want explicit empty object", received["alive"])
+	}
+	if online, ok := received["online"].(map[string]interface{}); !ok || len(online) != 0 {
+		t.Fatalf("online = %#v, want explicit empty object", received["online"])
+	}
+	if _, ok := received["relay_user_traffic"]; ok {
+		t.Fatalf("relay_user_traffic should be omitted when empty")
+	}
+}
+
 func TestResetETags(t *testing.T) {
 	callCount := 0
 	ts, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {

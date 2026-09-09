@@ -9,9 +9,20 @@
 
 # ── Multiple instances ──
 # kernel:
-#   type: "singbox"
+#   type: "xray"      # 安装器默认写入 xray；机器模式下节点可在面板分别选择内核
 # log:
 #   level: "info"
+# time_sync:
+#   enabled: true                 # 只校准 Node 进程内协议时间，不修改系统时间
+#   servers:
+#     - "time.cloudflare.com"
+#     - "time.google.com"
+#     - "pool.ntp.org"
+#   interval: 600                 # 查询间隔，单位：秒
+#   timeout: 3                    # 单个 NTP 源超时，单位：秒
+#   warn_offset: 5                # 偏移达到 5 秒时告警
+#   error_offset: 15              # 偏移达到 15 秒时标记错误
+#   critical_offset: 25           # 偏移达到 25 秒时标记严重错误
 # instances:
 #   - panel:
 #       url: "https://panel.example.com"
@@ -24,3 +35,9 @@
 #       token: "machine-token-2"
 #     log:
 #       level: "debug"   # override for this instance only
+
+# ── Xray REALITY ──
+# kernel:
+#   type: "xray"
+#   reality_min_client_ver: "0.0.0"   # REALITY 最低客户端版本，三段数字；留空按 0.0.0 处理
+#                                     # 详见 docs-xray-reality.md

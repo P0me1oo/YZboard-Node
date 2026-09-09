@@ -11,6 +11,7 @@ import (
 	"github.com/cedar2025/xboard-node/internal/kernel"
 	"github.com/cedar2025/xboard-node/internal/model"
 	"github.com/cedar2025/xboard-node/internal/nlog"
+	xrayTLS "github.com/xtls/xray-core/transport/internet/tls"
 )
 
 // M is a shorthand for building JSON-like maps
@@ -33,6 +34,14 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 			tags[strings.ToLower(tag)] = true
 		}
 		outbounds = append(outbounds, M(co))
+	}
+
+	// Internal transit outbounds, one per logical node behind this entry.
+	for _, ro := range buildRelayOutbounds(nc) {
+		if tag, _ := ro["tag"].(string); tag != "" {
+			tags[strings.ToLower(tag)] = true
+		}
+		outbounds = append(outbounds, ro)
 	}
 
 	// Add default outbounds only if not already defined (Issue #1: Panel priority)
@@ -68,7 +77,7 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 		"outbounds": outbounds,
 	}
 
-	inbound := buildInbound(nc, users, tc)
+	inbound := buildInbound(kcfg, nc, users, tc)
 	if inbound != nil {
 		cfg["inbounds"] = []M{inbound}
 	} else {
@@ -78,7 +87,7 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	}
 
 	// Merge panel routes and static config routes
-	cfg["routing"] = buildRouting(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute))
+	cfg["routing"] = buildRouting(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute), buildRelayRoutingRules(nc))
 
 	mergeCustomXray(cfg, kcfg)
 	return cfg
@@ -88,17 +97,54 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 // into an Xray outbound object. Xray uses a nested layout where protocol-
 // specific fields go inside a "settings" key, and chain proxying uses "proxySettings".
 func outboundConfigToXray(oc model.OutboundConfig) M {
+	protocol := oc.Protocol
+	switch {
+	case model.IsDirectOutbound(protocol):
+		protocol = "freedom"
+	case model.IsBlockOutbound(protocol):
+		protocol = "blackhole"
+	}
+
 	m := M{
-		"protocol": oc.Protocol,
+		"protocol": protocol,
 		"tag":      oc.Tag,
 	}
-	if len(oc.Settings) > 0 {
-		m["settings"] = oc.Settings
+
+	// sendThrough 绑定出站源地址，在 xray 里是 outbound 顶层字段而不是 settings 的一项，
+	// 因此从 settings 里提升上来；settings 是共享数据，提升时复制一份再删。
+	settings := oc.Settings
+	for _, key := range model.SendThroughKeys {
+		value, ok := settings[key]
+		if !ok {
+			continue
+		}
+		if text, isText := value.(string); !isText || strings.TrimSpace(text) == "" {
+			continue
+		}
+		m["sendThrough"] = value
+		settings = cloneWithout(settings, model.SendThroughKeys)
+		break
+	}
+
+	if len(settings) > 0 {
+		m["settings"] = settings
 	}
 	if oc.ProxyTag != "" {
 		m["proxySettings"] = M{"tag": oc.ProxyTag}
 	}
 	return m
+}
+
+// cloneWithout 复制 settings 并去掉指定键，避免改动调用方持有的 map。
+func cloneWithout(settings map[string]any, drop []string) map[string]any {
+	out := make(map[string]any, len(settings))
+	for k, v := range settings {
+		out[k] = v
+	}
+	for _, k := range drop {
+		delete(out, k)
+	}
+	return out
 }
 
 func mergeRouteList(a, b []map[string]any) []map[string]any {
@@ -197,7 +243,12 @@ func xrayLogLevel(singboxLevel string) string {
 	}
 }
 
-func buildInbound(nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+func buildInbound(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+	// A landing node only serves the internal transit inbound; panel users never reach it.
+	if nc.IsRelayLanding() {
+		return buildRelayLandingInbound(kcfg, nc, tc)
+	}
+
 	listenAddr := "::"
 	if nc.ListenIP != "" {
 		listenAddr = nc.ListenIP
@@ -216,17 +267,17 @@ func buildInbound(nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert)
 
 	switch nc.Protocol {
 	case "vmess":
-		return buildVMess(base, nc, users, tc)
+		return buildVMess(base, kcfg, nc, users, tc)
 	case "vless":
-		return buildVLESS(base, nc, users, tc)
+		return buildVLESS(base, kcfg, nc, users, tc)
 	case "trojan":
-		return buildTrojan(base, nc, users, tc)
+		return buildTrojan(base, kcfg, nc, users, tc)
 	case "shadowsocks":
 		return buildShadowsocks(base, nc, users)
 	case "socks":
 		return buildSocks(base, users)
 	case "http":
-		return buildHTTP(base, nc, users, tc)
+		return buildHTTP(base, kcfg, nc, users, tc)
 	case "hysteria":
 		return buildHysteria(base, nc, users, tc)
 	default:
@@ -240,7 +291,7 @@ func userEmail(userID int) string {
 	return fmt.Sprintf("user@%d", userID)
 }
 
-func buildVMess(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+func buildVMess(base M, kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	clients := make([]M, 0, len(users))
 	for _, u := range users {
 		clients = append(clients, M{
@@ -251,11 +302,11 @@ func buildVMess(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TL
 	}
 	base["settings"] = M{"clients": clients}
 
-	applyStreamSettings(base, nc, tc)
+	applyStreamSettings(base, kcfg, nc, tc)
 	return base
 }
 
-func buildVLESS(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+func buildVLESS(base M, kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	clients := make([]M, 0, len(users))
 	for _, u := range users {
 		client := M{
@@ -276,11 +327,11 @@ func buildVLESS(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TL
 		"decryption": decryption,
 	}
 
-	applyStreamSettings(base, nc, tc)
+	applyStreamSettings(base, kcfg, nc, tc)
 	return base
 }
 
-func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+func buildTrojan(base M, kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	clients := make([]M, len(users))
 	for i := range users {
 		u := &users[i]
@@ -291,7 +342,7 @@ func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.T
 	}
 	base["settings"] = M{"clients": clients}
 
-	applyStreamSettings(base, nc, tc)
+	applyStreamSettings(base, kcfg, nc, tc)
 
 	// Trojan requires TLS or Reality to be enabled.
 	// If the panel didn't explicitly set TLS=1 or TLS=2, but we have certs,
@@ -299,7 +350,7 @@ func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.T
 	ss, _ := base["streamSettings"].(M)
 	if security, ok := ss["security"].(string); !ok || (security != "tls" && security != "reality") {
 		nc.TLS = 1 // Force internal state to trigger TLS build in applyStreamSettings
-		applyStreamSettings(base, nc, tc)
+		applyStreamSettings(base, kcfg, nc, tc)
 	}
 
 	return base
@@ -316,6 +367,18 @@ var ss2022Methods = map[string]ss2022Config{
 	"2022-blake3-chacha20-poly1305": {"2022-blake3-chacha20-poly1305", 32},
 }
 
+// ss2022UserKey 与面板生成订阅密码时的 uuidToBase64 规则保持一致：
+// 截取 UUID 文本的前 size 个字节，再使用标准 Base64 编码。
+// 完整配置和 UserManager 热更新必须复用同一转换，否则 UUID 轮换后
+// 动态加入的用户会得到与客户端订阅不同的 SS2022 密钥。
+func ss2022UserKey(uuid string, size int) string {
+	raw := []byte(uuid)
+	if len(raw) > size {
+		raw = raw[:size]
+	}
+	return base64.StdEncoding.EncodeToString(raw)
+}
+
 func buildShadowsocks(base M, nc *model.NodeSpec, users []model.UserSpec) M {
 	ss2022, isSS2022 := ss2022Methods[nc.Cipher]
 
@@ -324,15 +387,10 @@ func buildShadowsocks(base M, nc *model.NodeSpec, users []model.UserSpec) M {
 	if isSS2022 {
 		// SS2022: server key at top level, per-user key must be Base64 of fixed-length raw bytes.
 		// Only blake3-aes-* supports multi-user in Xray; chacha20 variant is single-user only.
-		rawBuf := make([]byte, ss2022.size)
 		for i := range users {
 			u := &users[i]
-			for j := range rawBuf {
-				rawBuf[j] = 0
-			}
-			copy(rawBuf, u.UUID)
 			clients = append(clients, M{
-				"password": base64.StdEncoding.EncodeToString(rawBuf),
+				"password": ss2022UserKey(u.UUID, ss2022.size),
 				"email":    userEmail(u.ID),
 			})
 		}
@@ -380,7 +438,7 @@ func buildSocks(base M, users []model.UserSpec) M {
 	return base
 }
 
-func buildHTTP(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+func buildHTTP(base M, kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	base["protocol"] = "http"
 	accounts := make([]M, 0, len(users))
 	for _, u := range users {
@@ -395,7 +453,7 @@ func buildHTTP(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLS
 	}
 
 	if nc.TLS == 1 {
-		applyStreamSettings(base, nc, tc)
+		applyStreamSettings(base, kcfg, nc, tc)
 	}
 	return base
 }
@@ -414,7 +472,10 @@ func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel
 			"email": userEmail(u.ID),
 		})
 	}
-	base["settings"] = M{"clients": clients}
+	base["settings"] = M{
+		"version": nc.Version,
+		"clients": clients,
+	}
 
 	ss := M{
 		"network": "hysteria",
@@ -424,6 +485,7 @@ func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel
 		},
 	}
 
+	finalMask := M{}
 	if nc.UpMbps > 0 || nc.DownMbps > 0 {
 		quicParams := M{}
 		if nc.UpMbps > 0 {
@@ -432,9 +494,17 @@ func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel
 		if nc.DownMbps > 0 {
 			quicParams["brutalDown"] = fmt.Sprintf("%d mbps", nc.DownMbps)
 		}
-		ss["finalMask"] = M{
-			"quicParams": quicParams,
-		}
+		finalMask["quicParams"] = quicParams
+	}
+	if nc.Obfs == "salamander" {
+		// 与客户端订阅使用同一份混淆参数，不能只把它下发给客户端。
+		finalMask["udp"] = []M{{
+			"type":     "salamander",
+			"settings": M{"password": nc.ObfsPassword},
+		}}
+	}
+	if len(finalMask) > 0 {
+		ss["finalMask"] = finalMask
 	}
 
 	if tc.HasCert() {
@@ -443,10 +513,14 @@ func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel
 			"certificate": []string{string(tc.CertPEM)},
 			"key":         []string{string(tc.KeyPEM)},
 		}
-		ss["tlsSettings"] = M{
+		tlsSettings := M{
 			"certificates": []M{tlsCert},
 			"alpn":         []string{"h3"},
 		}
+		if echKeys := extractECHServerKeys(nc.TLSSettings); echKeys != "" {
+			tlsSettings["echServerKeys"] = echKeys
+		}
+		ss["tlsSettings"] = tlsSettings
 	} else {
 		nlog.Core().Warn("hysteria requires TLS certificate files; configure cert_mode (self, file, http, dns, or content)")
 	}
@@ -459,104 +533,13 @@ func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel
 	return base
 }
 
-func applyStreamSettings(base M, nc *model.NodeSpec, tc kernel.TLSCert) {
-	ss := M{}
-
-	// Network / transport
-	network := nc.Network
-	if network == "" {
-		network = "tcp"
+func applyStreamSettings(base M, kcfg config.KernelConfig, nc *model.NodeSpec, tc kernel.TLSCert) {
+	transportAuth := ""
+	if nc.IsRelayLanding() && nc.Relay.VLESS != nil {
+		transportAuth = nc.Relay.VLESS.TransportAuth
 	}
-	ss["network"] = network
-
-	switch network {
-	case "ws":
-		wsSettings := M{}
-		if nc.NetworkSettings != nil {
-			if v, ok := nc.NetworkSettings["path"]; ok {
-				wsSettings["path"] = v
-			}
-			headers := M{}
-			if v, ok := nc.NetworkSettings["headers"]; ok {
-				if headersMap, ok := v.(map[string]interface{}); ok {
-					for k, val := range headersMap {
-						headers[k] = val
-					}
-				}
-			}
-			if v, ok := nc.NetworkSettings["host"]; ok {
-				headers["Host"] = v
-			}
-			if len(headers) > 0 {
-				wsSettings["headers"] = headers
-			}
-		}
-		ss["wsSettings"] = wsSettings
-
-	case "grpc":
-		grpcSettings := M{}
-		if nc.NetworkSettings != nil {
-			if v, ok := nc.NetworkSettings["serviceName"]; ok {
-				grpcSettings["serviceName"] = v
-			} else if v, ok := nc.NetworkSettings["service_name"]; ok {
-				grpcSettings["serviceName"] = v
-			}
-		}
-		ss["grpcSettings"] = grpcSettings
-
-	case "httpupgrade":
-		huSettings := M{}
-		if nc.NetworkSettings != nil {
-			if v, ok := nc.NetworkSettings["path"]; ok {
-				huSettings["path"] = v
-			}
-			if v, ok := nc.NetworkSettings["host"]; ok {
-				huSettings["host"] = v
-			}
-		}
-		ss["httpupgradeSettings"] = huSettings
-
-	case "h2", "http":
-		ss["network"] = "h2"
-		h2Settings := M{}
-		if nc.NetworkSettings != nil {
-			if v, ok := nc.NetworkSettings["path"]; ok {
-				h2Settings["path"] = v
-			}
-			if v, ok := nc.NetworkSettings["host"]; ok {
-				h2Settings["host"] = []interface{}{v}
-			}
-		}
-		ss["httpSettings"] = h2Settings
-
-	case "xhttp", "splithttp":
-		ss["network"] = "xhttp"
-		xhttpSettings := M{}
-		if nc.NetworkSettings != nil {
-			if v, ok := nc.NetworkSettings["path"]; ok {
-				xhttpSettings["path"] = v
-			}
-			if v, ok := nc.NetworkSettings["host"]; ok {
-				xhttpSettings["host"] = v
-			}
-			if v, ok := nc.NetworkSettings["mode"]; ok {
-				xhttpSettings["mode"] = v
-			}
-			if v, ok := nc.NetworkSettings["extra"]; ok {
-				// PHP sends empty arrays [] instead of {} for empty objects;
-				// xray rejects [] for fields that expect objects (e.g. sockopt, tlsSettings).
-				// Recursively strip empty arrays from the extra map before passing to xray.
-				if m, ok := v.(map[string]interface{}); ok && len(m) > 0 {
-					sanitizeEmptyArrays(m)
-					xhttpSettings["extra"] = m
-				}
-			}
-		}
-		ss["xhttpSettings"] = xhttpSettings
-
-	case "tcp":
-		// default, no extra settings
-	}
+	ss := buildTransportStreamSettings(nc.Network, nc.NetworkSettings, transportAuth)
+	network, _ := model.NormalizeRelayVLESSNetwork(nc.Network)
 
 	// TLS
 	if nc.TLS == 1 {
@@ -577,6 +560,9 @@ func applyStreamSettings(base M, nc *model.NodeSpec, tc kernel.TLSCert) {
 				tlsSettings["echServerKeys"] = echKeys
 			}
 		}
+		if network == "hysteria" {
+			tlsSettings["alpn"] = []string{"h3"}
+		}
 		if tc.HasCert() {
 			tlsCert := M{
 				"certificate": []string{string(tc.CertPEM)},
@@ -592,7 +578,7 @@ func applyStreamSettings(base M, nc *model.NodeSpec, tc kernel.TLSCert) {
 		ss["tlsSettings"] = tlsSettings
 	} else if nc.TLS == 2 {
 		ss["security"] = "reality"
-		ss["realitySettings"] = buildRealitySettings(nc)
+		ss["realitySettings"] = buildRealitySettings(kcfg, nc)
 	}
 
 	// Proxy Protocol
@@ -608,8 +594,13 @@ func applyStreamSettings(base M, nc *model.NodeSpec, tc kernel.TLSCert) {
 	base["streamSettings"] = ss
 }
 
-func buildRealitySettings(nc *model.NodeSpec) M {
-	reality := M{"show": false}
+func buildRealitySettings(kcfg config.KernelConfig, nc *model.NodeSpec) M {
+	// minClientVer is always emitted: xray-core falls back to its own built-in
+	// floor (26.3.27) when the field is absent, which would reject older clients.
+	reality := M{
+		"show":         false,
+		"minClientVer": kcfg.RealityMinClientVersion(),
+	}
 
 	if nc.TLSSettings == nil {
 		return reality
@@ -645,7 +636,13 @@ func buildRealitySettings(nc *model.NodeSpec) M {
 	return reality
 }
 
-func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteRule, customRules []map[string]any) M {
+// buildRouting assembles the rule list in priority order:
+//  1. structured custom route rules (explicit panel overrides)
+//  2. raw custom routes (native escape hatch)
+//  3. built-in private/loopback blocklist
+//  4. relay rules — a logical node's exit must not be overridden by generic panel routes
+//  5. panel routes
+func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteRule, customRules []map[string]any, relayRules []M) M {
 	var xrayRules []M
 
 	// Structured custom routes now take the highest priority for panel-managed overrides.
@@ -678,6 +675,8 @@ func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteR
 		},
 		"outboundTag": "block",
 	})
+
+	xrayRules = append(xrayRules, relayRules...)
 
 	for _, rule := range rules {
 		xrayRules = append(xrayRules, compilePanelRouteRule(rule)...)
@@ -823,6 +822,45 @@ func sanitizeEmptyArrays(m map[string]interface{}) {
 			sanitizeEmptyArrays(val)
 		}
 	}
+}
+
+// validateHysteriaECHKeys 校验实际生成的密钥，避免再次读取文件时与配置内容不一致。
+func validateHysteriaECHKeys(nc *model.NodeSpec, cfg M) error {
+	if nc.Protocol != "hysteria" || nc.Version != 2 {
+		return nil
+	}
+	ech, _ := nc.TLSSettings["ech"].(map[string]any)
+	if ech["enabled"] != true {
+		return nil
+	}
+	var encoded string
+	inbounds, _ := cfg["inbounds"].([]M)
+	for _, inbound := range inbounds {
+		if inbound["protocol"] != "hysteria" {
+			continue
+		}
+		stream, _ := inbound["streamSettings"].(M)
+		tlsSettings, _ := stream["tlsSettings"].(M)
+		encoded, _ = tlsSettings["echServerKeys"].(string)
+		break
+	}
+	if encoded == "" {
+		return fmt.Errorf("hysteria2 ECH: missing or unreadable server keys")
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return fmt.Errorf("hysteria2 ECH: invalid server key encoding")
+	}
+	keys, err := xrayTLS.ConvertToGoECHKeys(data)
+	if err != nil || len(keys) == 0 {
+		return fmt.Errorf("hysteria2 ECH: invalid server key list")
+	}
+	for _, key := range keys {
+		if len(key.PrivateKey) == 0 || len(key.Config) == 0 {
+			return fmt.Errorf("hysteria2 ECH: invalid server key entry")
+		}
+	}
+	return nil
 }
 
 // extractECHServerKeys extracts the ECH private key from tls_settings.ech

@@ -162,3 +162,25 @@ func TestNodeMailboxDeltaFailedApplyNotifies(t *testing.T) {
 		t.Fatal("expected NeedsReconcile for invalid delta action")
 	}
 }
+
+func TestNodeMailboxRemovingLastUserPreservesEmptySnapshot(t *testing.T) {
+	mb := NewNodeMailbox()
+	user := model.UserSpec{ID: 1}
+	mb.SeedBaseline([]model.UserSpec{user}, nil)
+	mb.MarkReady()
+	for range 2 {
+		mb.Apply(Event{Type: EventSyncUserDelta, DeltaAction: "remove", DeltaUsers: []model.UserSpec{user}})
+		state := mb.DrainIfReady()
+		if !state.HasUsers || state.Users == nil || len(state.Users) != 0 || state.NeedsReconcile {
+			t.Fatalf("删除最后一个用户后应返回非 nil 空快照: %+v", state)
+		}
+		if mb.DrainIfReady().HasUsers {
+			t.Fatal("已消费的用户快照被重复返回")
+		}
+	}
+	mb.Apply(Event{Type: EventSyncUserDelta, DeltaAction: "add", DeltaUsers: []model.UserSpec{user}})
+	state := mb.DrainIfReady()
+	if !state.HasUsers || len(state.Users) != 1 || state.Users[0].ID != user.ID {
+		t.Fatal("空快照之后未能重新添加用户")
+	}
+}

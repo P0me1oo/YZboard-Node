@@ -14,16 +14,22 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cedar2025/xboard-node/internal/buildinfo"
 	"github.com/cedar2025/xboard-node/internal/config"
 	"github.com/cedar2025/xboard-node/internal/machine"
 	"github.com/cedar2025/xboard-node/internal/nlog"
 	"github.com/cedar2025/xboard-node/internal/service"
+	"github.com/cedar2025/xboard-node/internal/timesync"
 )
 
 var (
 	version   = "dev"
 	buildTime = "unknown"
+	commit    = "unknown"
 )
+
+// 退出最多需要等待在途报告、失败重试和最终报告各 30 秒，以及内核排空。
+const shutdownGracePeriod = 2 * time.Minute
 
 func main() {
 	configPath := flag.String("c", "config.yml", "config file path")
@@ -31,7 +37,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("xboard-node %s (built %s)\n", version, buildTime)
+		fmt.Println(buildinfo.Report("xboard-node", version, buildTime, commit))
 		os.Exit(0)
 	}
 
@@ -58,7 +64,9 @@ func main() {
 func runWithReload(initialRoot *config.RootConfig, configPath string) {
 	var healthSrv *http.Server
 	var healthPort int
+	health := newHealthTracker()
 	startHealth := func(port int) {
+		healthPort = port
 		if port <= 0 {
 			return
 		}
@@ -68,16 +76,12 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 			os.Exit(1)
 		}
 		mux := http.NewServeMux()
-		mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"status":"ok"}`))
-		})
-		healthSrv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-		healthPort = port
+		mux.Handle("/healthz", health)
+		srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		healthSrv = srv
 		go func() {
 			nlog.Core().Debug(fmt.Sprintf("health check listening on :%d", port))
-			if err := healthSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 				nlog.Core().Warn("health check server stopped", "error", err)
 			}
 		}()
@@ -95,12 +99,12 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 		}
 	}()
 
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
 	for root := initialRoot; ; {
 		ctx, cancel := context.WithCancel(context.Background())
-
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
 		reloadCh := make(chan *config.RootConfig, 1)
 
 		watcher, err := config.WatchConfigRoot(ctx, configPath, func(newCfg *config.RootConfig) {
@@ -113,24 +117,6 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 			nlog.Core().Warn("config watcher unavailable, hot-reload disabled", "error", err)
 		}
 
-		go func() {
-			select {
-			case sig := <-sigCh:
-				nlog.Core().Info(fmt.Sprintf("received %v, shutting down...", sig))
-				cancel()
-
-				select {
-				case sig = <-sigCh:
-					nlog.Core().Warn("received second signal, forcing exit", "signal", sig)
-					os.Exit(1)
-				case <-time.After(15 * time.Second):
-					nlog.Core().Error("shutdown timed out after 15s, forcing exit")
-					os.Exit(2)
-				}
-			case <-ctx.Done():
-			}
-		}()
-
 		instances, err := root.NormalizeInstances()
 		if err != nil {
 			nlog.Core().Error("failed to normalize config", "error", err)
@@ -140,6 +126,10 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 			nlog.Core().Error("startup layout validation failed", "error", err)
 			os.Exit(1)
 		}
+		timeManager := timesync.New(instances[0].TimeSync)
+		timesync.SetDefault(timeManager)
+		health.setClock(timeManager)
+		timeManager.Start(ctx)
 
 		if instances[0].HealthPort != healthPort {
 			if healthSrv != nil {
@@ -149,21 +139,34 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 			startHealth(instances[0].HealthPort)
 		}
 
-		errCh := make(chan error, len(instances))
+		instanceHealthIDs, allHealthIDs := healthComponentIDs(instances)
+		health.reset(allHealthIDs)
+
+		errCh := make(chan error, 1)
+		reportError := func(err error) {
+			select {
+			case errCh <- err:
+			default:
+			}
+			// 单个节点或实例初始化失败不取消其他节点的共享上下文。
+		}
 		doneCh := make(chan struct{})
 		var wg sync.WaitGroup
-		for _, instanceCfg := range instances {
+		for instanceIndex, instanceCfg := range instances {
 			instanceCfg := instanceCfg
+			healthIDs := instanceHealthIDs[instanceIndex]
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				if instanceCfg.IsMachineMode() {
 					nlog.Core().Info("starting machine instance", "instance", instanceCfg.InstanceID, "machine_id", instanceCfg.Machine.MachineID, "panel_url", instanceCfg.Panel.URL)
 					orch := machine.New(instanceCfg)
+					orch.SetStatusHandler(func(status service.RuntimeStatus) {
+						health.set(healthIDs[0], status)
+					})
 					if err := orch.Run(ctx); err != nil {
 						nlog.Core().Error("machine instance exited with error", "instance", instanceCfg.InstanceID, "error", err)
-						errCh <- err
-						cancel()
+						reportError(err)
 					}
 					return
 				}
@@ -172,6 +175,7 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 				var instanceWG sync.WaitGroup
 				for idx, nodeCfg := range nodes {
 					nodeCfg := nodeCfg
+					healthID := healthIDs[idx]
 					instanceWG.Add(1)
 					go func(idx int) {
 						defer instanceWG.Done()
@@ -187,10 +191,12 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 							}
 						}
 						svc := service.New(nodeCfg)
+						svc.SetStatusHandler(func(status service.RuntimeStatus) {
+							health.set(healthID, status)
+						})
 						if err := svc.Run(ctx); err != nil {
 							nlog.Core().Error("node service exited with error", "instance", nodeCfg.InstanceID, "node_id", nodeCfg.Panel.NodeID, "error", err)
-							errCh <- err
-							cancel()
+							reportError(err)
 						}
 					}(idx)
 				}
@@ -204,14 +210,32 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 		case newRoot = <-reloadCh:
 			nlog.Core().Info("config changed, restarting all services...")
 			cancel()
-			<-doneCh
+			if sig, shuttingDown := waitForReloadStop(doneCh, sigCh); shuttingDown {
+				nlog.Core().Info(fmt.Sprintf("received %v during reload, shutting down...", sig))
+				forceExitIfNeeded(waitForShutdown(doneCh, sigCh, shutdownGracePeriod))
+				if watcher != nil {
+					watcher.Stop()
+				}
+				timeManager.Stop()
+				return
+			}
+		case sig := <-sigCh:
+			nlog.Core().Info(fmt.Sprintf("received %v, shutting down...", sig))
+			cancel()
+			forceExitIfNeeded(waitForShutdown(doneCh, sigCh, shutdownGracePeriod))
+			if watcher != nil {
+				watcher.Stop()
+			}
+			timeManager.Stop()
+			return
 		case <-doneCh:
 		}
 
-		signal.Stop(sigCh)
+		cancel()
 		if watcher != nil {
 			watcher.Stop()
 		}
+		timeManager.Stop()
 
 		if newRoot == nil {
 			close(errCh)
@@ -232,6 +256,68 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 		root = newRoot
 		nlog.Core().Info("reload complete, services restarting with new config")
 	}
+}
+
+type shutdownResult int
+
+const (
+	shutdownComplete shutdownResult = iota
+	shutdownSecondSignal
+	shutdownTimedOut
+)
+
+func waitForReloadStop(done <-chan struct{}, signals <-chan os.Signal) (os.Signal, bool) {
+	select {
+	case <-done:
+		return nil, false
+	case sig := <-signals:
+		return sig, true
+	}
+}
+
+func waitForShutdown(done <-chan struct{}, signals <-chan os.Signal, timeout time.Duration) shutdownResult {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return shutdownComplete
+	case <-signals:
+		return shutdownSecondSignal
+	case <-timer.C:
+		return shutdownTimedOut
+	}
+}
+
+func forceExitIfNeeded(result shutdownResult) {
+	switch result {
+	case shutdownSecondSignal:
+		nlog.Core().Warn("received second signal, forcing exit")
+		os.Exit(1)
+	case shutdownTimedOut:
+		nlog.Core().Error("shutdown timed out, forcing exit", "timeout", shutdownGracePeriod)
+		os.Exit(2)
+	}
+}
+
+func healthComponentIDs(instances []*config.Config) ([][]string, []string) {
+	perInstance := make([][]string, len(instances))
+	var all []string
+	for instanceIndex, instanceCfg := range instances {
+		if instanceCfg.IsMachineMode() {
+			id := fmt.Sprintf("instance/%d/machine", instanceIndex)
+			perInstance[instanceIndex] = []string{id}
+			all = append(all, id)
+			continue
+		}
+		nodes := instanceCfg.ExpandNodes()
+		ids := make([]string, len(nodes))
+		for nodeIndex := range nodes {
+			ids[nodeIndex] = fmt.Sprintf("instance/%d/node/%d", instanceIndex, nodeIndex)
+		}
+		perInstance[instanceIndex] = ids
+		all = append(all, ids...)
+	}
+	return perInstance, all
 }
 
 // applyRuntimeConfig wires up Go runtime memory limits from the config file.

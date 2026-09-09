@@ -48,15 +48,29 @@ type Snapshot struct {
 	Users  []model.UserSpec
 }
 
+// PollStateResetter 强制下一次 REST 对账返回完整配置和用户快照。
+type PollStateResetter interface {
+	ResetPollingState()
+}
+
 type ReportPayload struct {
-	Traffic map[int][2]int64
-	Alive   map[int][]string
-	Online  map[int]int
-	CPU     float64
-	Mem     [2]uint64
-	Swap    [2]uint64
-	Disk    [2]uint64
-	Metrics map[string]interface{}
+	// ReportID 标识一次刷出的报告批次，失败重试时复用同一 ID。
+	// 为空时兼容未提供批次标识的旧调用方。
+	ReportID string
+	Traffic  map[int][2]int64
+	// RelayTraffic 是入口节点上各中转逻辑节点独立出站的流量，键为逻辑节点 ID。
+	// 只作为落地线路运营统计，面板不据此扣除用户套餐。
+	RelayTraffic map[int][2]int64
+	// RelayUserTraffic 是入口节点按用户和逻辑落地节点拆分的流量。
+	// 它只用于归属明细，不参与用户套餐扣除，也不替代 RelayTraffic。
+	RelayUserTraffic map[int]map[int][2]int64
+	Alive            map[int][]string
+	Online           map[int]int
+	CPU              float64
+	Mem              [2]uint64
+	Swap             [2]uint64
+	Disk             [2]uint64
+	Metrics          map[string]interface{}
 }
 
 type PushClient interface {

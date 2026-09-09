@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cedar2025/xboard-node/internal/config"
 	"github.com/cedar2025/xboard-node/internal/model"
 	"github.com/cedar2025/xboard-node/internal/nlog"
 	"github.com/cedar2025/xboard-node/internal/panel"
@@ -16,7 +15,6 @@ import (
 // PushClient supplied by the machine WS mux.
 type MachinePanelControlPlane struct {
 	client *panel.Client
-	kcfg   config.KernelConfig
 	push   PushClient // virtual push client from WS mux (may be nil)
 
 	registerFn func(statuses chan<- StatusChange) *NodeMailbox
@@ -28,13 +26,11 @@ type MachinePanelControlPlane struct {
 // updates into the service loop. It may be nil when WS is not used.
 func NewMachinePanelControlPlane(
 	client *panel.Client,
-	kcfg config.KernelConfig,
 	push PushClient,
 	registerFn func(statuses chan<- StatusChange) *NodeMailbox,
 ) *MachinePanelControlPlane {
 	return &MachinePanelControlPlane{
 		client:     client,
-		kcfg:       kcfg,
 		push:       push,
 		registerFn: registerFn,
 	}
@@ -65,6 +61,14 @@ func (p *MachinePanelControlPlane) Initial(
 		bootstrap.PullInterval = hs.Settings.PullInterval
 	}
 
+	configETag, userETag := p.client.ETags()
+	committed := false
+	defer func() {
+		if !committed {
+			p.client.RestoreETags(configETag, userETag)
+		}
+	}()
+
 	configSnapshot, err := p.client.GetConfig()
 	if err != nil {
 		return Bootstrap{}, fmt.Errorf("machine initial config: %w", err)
@@ -76,11 +80,9 @@ func (p *MachinePanelControlPlane) Initial(
 	if err != nil {
 		return Bootstrap{}, fmt.Errorf("machine initial users: %w", err)
 	}
-	bootstrap.Config, err = model.NodeSpecFromPanelValidated(configSnapshot, p.kcfg)
-	if err != nil {
-		return Bootstrap{}, fmt.Errorf("machine initial config normalize: %w", err)
-	}
+	bootstrap.Config = model.NodeSpecFromPanel(configSnapshot)
 	bootstrap.Users = model.UserSpecsFromPanel(users)
+	committed = true
 
 	// Register mailbox access after the initial snapshot is prepared, so the
 	// Service can start the kernel immediately and only then drain coalesced WS
@@ -96,6 +98,14 @@ func (p *MachinePanelControlPlane) Initial(
 }
 
 func (p *MachinePanelControlPlane) Poll(ctx context.Context) (Snapshot, error) {
+	configETag, userETag := p.client.ETags()
+	committed := false
+	defer func() {
+		if !committed {
+			p.client.RestoreETags(configETag, userETag)
+		}
+	}()
+
 	configSnapshot, err := p.client.GetConfig()
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("machine poll config: %w", err)
@@ -109,11 +119,12 @@ func (p *MachinePanelControlPlane) Poll(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, ctx.Err()
 	default:
 	}
-	nodeSpec, err := model.NodeSpecFromPanelValidated(configSnapshot, p.kcfg)
-	if err != nil {
-		return Snapshot{}, fmt.Errorf("machine poll normalize: %w", err)
-	}
-	return Snapshot{Config: nodeSpec, Users: model.UserSpecsFromPanel(users)}, nil
+	committed = true
+	return Snapshot{Config: model.NodeSpecFromPanel(configSnapshot), Users: model.UserSpecsFromPanel(users)}, nil
+}
+
+func (p *MachinePanelControlPlane) ResetPollingState() {
+	p.client.ResetETags()
 }
 
 func (p *MachinePanelControlPlane) Discover(
@@ -127,7 +138,8 @@ func (p *MachinePanelControlPlane) Discover(
 
 func (p *MachinePanelControlPlane) Report(payload ReportPayload) error {
 	return p.client.Report(
-		payload.Traffic, payload.Alive, payload.Online,
+		payload.ReportID,
+		payload.Traffic, payload.RelayTraffic, payload.RelayUserTraffic, payload.Alive, payload.Online,
 		payload.CPU, payload.Mem, payload.Swap, payload.Disk,
 		payload.Metrics,
 	)

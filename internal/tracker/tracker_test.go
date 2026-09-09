@@ -164,10 +164,20 @@ func TestFlushAliveIPs(t *testing.T) {
 		t.Errorf("user 2 IPs: got %d, want 1", len(flushed[2]))
 	}
 
-	// Without another Process call, hash is same → returns nil (skip duplicate)
+	// 稳定在线时也必须重复返回完整快照，供面板刷新 TTL。
 	flushed2 := tr.FlushAliveIPs()
-	if flushed2 != nil {
-		t.Errorf("expected nil on duplicate flush, got %v", flushed2)
+	if len(flushed2[1]) != 2 || len(flushed2[2]) != 1 {
+		t.Errorf("expected full duplicate snapshot, got %v", flushed2)
+	}
+}
+
+func TestFlushAliveIPsReturnsExplicitEmptySnapshot(t *testing.T) {
+	tr := New()
+	tr.Process(map[int][2]int64{}, map[int]map[string]bool{}, 0)
+
+	flushed := tr.FlushAliveIPs()
+	if flushed == nil || len(flushed) != 0 {
+		t.Fatalf("expected non-nil empty snapshot, got %#v", flushed)
 	}
 }
 

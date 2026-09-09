@@ -1,27 +1,39 @@
-# Build stage
-FROM golang:1.26-alpine AS builder
+# 构建工具链、功能标签和来源提交与 Release 保持一致。
+FROM --platform=$BUILDPLATFORM golang:1.26.4-alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
+ARG NODE_VERSION
+ARG SOURCE_COMMIT
 
 RUN apk add --no-cache git
 
 WORKDIR /build
 
 COPY go.mod go.sum ./
+COPY compat/sing-anytls/go.mod ./compat/sing-anytls/go.mod
+COPY compat/sing-shadowsocks/go.mod ./compat/sing-shadowsocks/go.mod
 RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 go build -ldflags "-s -w \
-    -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev) \
+RUN test -n "$NODE_VERSION" && \
+    test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT" && \
+    test -z "$(git status --porcelain)" && \
+    CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
+    go build -mod=readonly -trimpath -buildvcs=true -ldflags "-s -w \
+    -X main.version=$NODE_VERSION -X main.commit=$SOURCE_COMMIT \
     -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    -tags "with_quic with_utls with_wireguard with_clash_api" \
-    -o xboard-node ./cmd/xboard-node
+    -tags "with_quic with_utls with_wireguard with_acme with_clash_api" \
+    -o /out/xboard-node ./cmd/xboard-node && \
+    go version -m /out/xboard-node | grep -F 'vcs.modified=false'
 
 # Runtime stage — sing-box & xray-core are embedded as Go libraries
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates tzdata
 
-COPY --from=builder /build/xboard-node /usr/local/bin/xboard-node
+COPY --from=builder /out/xboard-node /usr/local/bin/xboard-node
 
 RUN mkdir -p /etc/xboard-node
 
@@ -29,11 +41,11 @@ WORKDIR /etc/xboard-node
 
 # Config can be provided via file mount OR environment variables.
 # Env var mode (no config file needed):
-#   docker run -d --network=host \
+#   docker run -d --network=host --stop-timeout=150 \
 #     -e apiHost=https://panel.example.com \
 #     -e apiKey=YOUR_TOKEN \
 #     -e nodeID=1 \
-#     ghcr.io/cedar2025/xboard-node:latest
+#     ghcr.io/p0me1oo/yzboard-node:v1.13-yz.19
 #
 # Supported env vars:
 #   apiHost  / API_HOST    → panel URL

@@ -1,6 +1,7 @@
 package xray
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -10,6 +11,14 @@ import (
 	"github.com/cedar2025/xboard-node/internal/kernel"
 	"github.com/cedar2025/xboard-node/internal/model"
 	"github.com/cedar2025/xboard-node/internal/panel"
+	xrayprotocol "github.com/xtls/xray-core/common/protocol"
+	"github.com/xtls/xray-core/infra/conf/serial"
+	hysteriaaccount "github.com/xtls/xray-core/proxy/hysteria/account"
+	"github.com/xtls/xray-core/proxy/shadowsocks"
+	ss2022 "github.com/xtls/xray-core/proxy/shadowsocks_2022"
+	"github.com/xtls/xray-core/proxy/trojan"
+	"github.com/xtls/xray-core/proxy/vless"
+	"github.com/xtls/xray-core/proxy/vmess"
 )
 
 var testKernelCfg = config.KernelConfig{
@@ -259,8 +268,168 @@ func TestBuildConfig_VLESS_Flow(t *testing.T) {
 	}
 }
 
+func TestBuildConfig_Hysteria2_Users(t *testing.T) {
+	nc := panel.NodeConfig{
+		Protocol:   "hysteria",
+		ServerPort: 24443,
+		Version:    2,
+	}
+	cfg := buildConfig(testKernelCfg, testNodeSpec(&nc), testUsers, kernel.TLSCert{
+		CertPEM: []byte("CERT"),
+		KeyPEM:  []byte("KEY"),
+	})
+
+	inbounds, ok := cfg["inbounds"].([]M)
+	if !ok || len(inbounds) != 1 {
+		t.Fatalf("inbounds = %#v, want one inbound", cfg["inbounds"])
+	}
+	settings, ok := inbounds[0]["settings"].(M)
+	if !ok {
+		t.Fatalf("settings = %#v, want object", inbounds[0]["settings"])
+	}
+	if settings["version"] != 2 {
+		t.Fatalf("settings.version = %#v, want 2", settings["version"])
+	}
+	clients, ok := settings["clients"].([]M)
+	if !ok || len(clients) != len(testUsers) {
+		t.Fatalf("clients = %#v, want %d clients", settings["clients"], len(testUsers))
+	}
+	if clients[0]["auth"] != testUsers[0].UUID || clients[0]["email"] != "user@1" {
+		t.Fatalf("first Hysteria client = %#v, want auth and user email", clients[0])
+	}
+
+	data, err := marshalConfig(testKernelCfg, testNodeSpec(&nc), testUsers, kernel.TLSCert{})
+	if err != nil {
+		t.Fatalf("marshalConfig() error = %v", err)
+	}
+	if _, err := serial.LoadJSONConfig(bytes.NewReader(data)); err != nil {
+		t.Fatalf("Xray rejected generated Hysteria2 config: %v", err)
+	}
+}
+
+func TestToMemoryUser_Hysteria2(t *testing.T) {
+	user := model.UserSpec{ID: 42, UUID: "hysteria-auth"}
+	got, err := toMemoryUser("hysteria", &model.NodeSpec{Protocol: "hysteria", Version: 2}, user)
+	if err != nil {
+		t.Fatalf("toMemoryUser() error = %v", err)
+	}
+	account, ok := got.Account.(*hysteriaaccount.MemoryAccount)
+	if !ok {
+		t.Fatalf("account type = %T, want *account.MemoryAccount", got.Account)
+	}
+	if account.Auth != user.UUID || got.Email != "user@42" {
+		t.Fatalf("memory user = %#v, account = %#v", got, account)
+	}
+}
+
+func TestToMemoryUser_RejectsRemovedShadowsocksNone(t *testing.T) {
+	for _, cipher := range []string{"none", "plain"} {
+		t.Run(cipher, func(t *testing.T) {
+			_, err := toMemoryUser("shadowsocks", &model.NodeSpec{
+				Protocol: "shadowsocks",
+				Cipher:   cipher,
+			}, model.UserSpec{ID: 42, UUID: "legacy-plaintext"})
+			if err == nil {
+				t.Fatalf("toMemoryUser(%q) succeeded; removed plaintext cipher must fail", cipher)
+			}
+		})
+	}
+}
+
+func TestToMemoryUser_ExistingXrayProtocols(t *testing.T) {
+	user := model.UserSpec{
+		ID:   42,
+		UUID: "11111111-1111-1111-1111-111111111111",
+	}
+	tests := []struct {
+		name     string
+		protocol string
+		node     model.NodeSpec
+		check    func(*testing.T, any)
+	}{
+		{
+			name:     "vmess",
+			protocol: "vmess",
+			node:     model.NodeSpec{Protocol: "vmess"},
+			check: func(t *testing.T, account any) {
+				got, ok := account.(*vmess.MemoryAccount)
+				if !ok || got.ID == nil || got.Security != xrayprotocol.SecurityType_AUTO {
+					t.Fatalf("VMess account = %#v", account)
+				}
+			},
+		},
+		{
+			name:     "vless",
+			protocol: "vless",
+			node: model.NodeSpec{
+				Protocol: "vless",
+				Flow:     "xtls-rprx-vision",
+			},
+			check: func(t *testing.T, account any) {
+				got, ok := account.(*vless.MemoryAccount)
+				if !ok || got.ID == nil || got.Flow != "xtls-rprx-vision" || got.Encryption != "none" {
+					t.Fatalf("VLESS account = %#v", account)
+				}
+			},
+		},
+		{
+			name:     "trojan",
+			protocol: "trojan",
+			node:     model.NodeSpec{Protocol: "trojan"},
+			check: func(t *testing.T, account any) {
+				got, ok := account.(*trojan.MemoryAccount)
+				if !ok || got.Password != user.UUID || len(got.Key) != 56 {
+					t.Fatalf("Trojan account = %#v", account)
+				}
+			},
+		},
+		{
+			name:     "shadowsocks-traditional",
+			protocol: "shadowsocks",
+			node: model.NodeSpec{
+				Protocol: "shadowsocks",
+				Cipher:   "aes-128-gcm",
+			},
+			check: func(t *testing.T, account any) {
+				got, ok := account.(*shadowsocks.MemoryAccount)
+				if !ok || got.Password != user.UUID || got.CipherType != shadowsocks.CipherType_AES_128_GCM {
+					t.Fatalf("Shadowsocks account = %#v", account)
+				}
+			},
+		},
+		{
+			name:     "shadowsocks-2022",
+			protocol: "shadowsocks",
+			node: model.NodeSpec{
+				Protocol: "shadowsocks",
+				Cipher:   "2022-blake3-aes-128-gcm",
+			},
+			check: func(t *testing.T, account any) {
+				got, ok := account.(*ss2022.MemoryAccount)
+				want := base64.StdEncoding.EncodeToString([]byte(user.UUID[:16]))
+				if !ok || got.Key != want {
+					t.Fatalf("Shadowsocks 2022 account = %#v", account)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := toMemoryUser(tc.protocol, &tc.node, user)
+			if err != nil {
+				t.Fatalf("toMemoryUser() error = %v", err)
+			}
+			if got.Email != "user@42" || got.Level != 0 {
+				t.Fatalf("MemoryUser = %#v", got)
+			}
+			tc.check(t, got.Account)
+		})
+	}
+}
+
 func TestBuildRouting_Default(t *testing.T) {
-	routing := buildRouting(nil, nil, nil)
+	routing := buildRouting(nil, nil, nil, nil)
 	rules := routing["rules"].([]M)
 
 	if len(rules) != 1 {
@@ -290,7 +459,7 @@ func TestBuildRouting_WithRules(t *testing.T) {
 		},
 	}
 
-	routing := buildRouting(testRouteRules(rules), nil, nil)
+	routing := buildRouting(testRouteRules(rules), nil, nil, nil)
 	xrayRules := routing["rules"].([]M)
 
 	// 1 default + 2 domain rules + 1 IP rule = 4
@@ -341,7 +510,7 @@ func TestBuildRouting_WithCustomRouteRules(t *testing.T) {
 		},
 	}
 
-	routing := buildRouting(nil, customRules, nil)
+	routing := buildRouting(nil, customRules, nil, nil)
 	xrayRules := routing["rules"].([]M)
 	if len(xrayRules) != 6 {
 		t.Fatalf("expected 6 rules, got %d", len(xrayRules))
@@ -372,7 +541,7 @@ func TestBuildRouting_StructuredCustomRulesRemainFirst(t *testing.T) {
 		Match:  model.RouteMatch{DomainSuffixes: []string{"structured.example"}},
 		Action: model.RouteAction{Type: "direct"},
 	}}
-	routing := buildRouting(nil, custom, raw)
+	routing := buildRouting(nil, custom, raw, nil)
 	xrayRules := routing["rules"].([]M)
 	if xrayRules[0]["outboundTag"] != "direct" {
 		t.Fatalf("expected structured rule first, got %v", xrayRules[0]["outboundTag"])
@@ -489,6 +658,40 @@ func TestBuildConfig_Shadowsocks_MultiUser(t *testing.T) {
 	if len(clients) != 2 {
 		t.Fatalf("expected 2 clients, got %d", len(clients))
 	}
+	want := base64.StdEncoding.EncodeToString([]byte(testUsers[0].UUID[:16]))
+	if got := clients[0].(map[string]interface{})["password"]; got != want {
+		t.Fatalf("first SS2022 user password = %v, want %q", got, want)
+	}
+}
+
+func TestSS2022DynamicUserKeyMatchesStaticConfig(t *testing.T) {
+	user := model.UserSpec{ID: 15, UUID: "01234567-89ab-cdef-0123-456789abcdef"}
+	tests := []struct {
+		cipher string
+		size   int
+	}{
+		{cipher: "2022-blake3-aes-128-gcm", size: 16},
+		{cipher: "2022-blake3-aes-256-gcm", size: 32},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.cipher, func(t *testing.T) {
+			node := &model.NodeSpec{Protocol: "shadowsocks", Cipher: tc.cipher, ServerKey: "server-key"}
+			inbound := buildShadowsocks(M{}, node, []model.UserSpec{user})
+			settings := inbound["settings"].(M)
+			staticKey := settings["clients"].([]M)[0]["password"].(string)
+
+			memoryUser, err := toMemoryUser("shadowsocks", node, user)
+			if err != nil {
+				t.Fatalf("toMemoryUser() error = %v", err)
+			}
+			dynamicKey := memoryUser.Account.(*ss2022.MemoryAccount).Key
+			want := base64.StdEncoding.EncodeToString([]byte(user.UUID[:tc.size]))
+			if staticKey != want || dynamicKey != want {
+				t.Fatalf("SS2022 keys differ: static=%q dynamic=%q want=%q", staticKey, dynamicKey, want)
+			}
+		})
+	}
 }
 
 func TestBuildConfig_SocksStats(t *testing.T) {
@@ -570,5 +773,82 @@ func TestExtractECHServerKeys(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tt.expect)
 			}
 		})
+	}
+}
+
+// realityNodeConfig builds a REALITY node whose keys and short IDs are shaped
+// the way xray-core requires, so the generated config can be parsed for real.
+func realityNodeConfig() *panel.NodeConfig {
+	return &panel.NodeConfig{
+		Protocol:   "vless",
+		ServerPort: 443,
+		Flow:       "xtls-rprx-vision",
+		TLS:        2,
+		TLSSettings: map[string]interface{}{
+			"private_key": base64.RawURLEncoding.EncodeToString(make([]byte, 32)),
+			"server_name": "www.example.com",
+			"short_id":    "0123456789abcdef",
+		},
+	}
+}
+
+func realitySettingsOf(t *testing.T, kcfg config.KernelConfig, nc *panel.NodeConfig) map[string]interface{} {
+	t.Helper()
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, kernel.TLSCert{})
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	inbounds := parsed["inbounds"].([]interface{})
+	ss := inbounds[0].(map[string]interface{})["streamSettings"].(map[string]interface{})
+	reality, ok := ss["realitySettings"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("realitySettings = %#v, want object", ss["realitySettings"])
+	}
+	return reality
+}
+
+func TestBuildConfig_RealityMinClientVerDefault(t *testing.T) {
+	// testKernelCfg leaves reality_min_client_ver unset: the generated config
+	// must still pin 0.0.0, otherwise xray-core falls back to its own floor.
+	reality := realitySettingsOf(t, testKernelCfg, realityNodeConfig())
+	if reality["minClientVer"] != config.DefaultRealityMinClientVer {
+		t.Errorf("minClientVer = %v, want %v", reality["minClientVer"], config.DefaultRealityMinClientVer)
+	}
+}
+
+func TestBuildConfig_RealityMinClientVerOverride(t *testing.T) {
+	kcfg := testKernelCfg
+	kcfg.RealityMinClientVer = "1.8.4"
+	reality := realitySettingsOf(t, kcfg, realityNodeConfig())
+	if reality["minClientVer"] != "1.8.4" {
+		t.Errorf("minClientVer = %v, want 1.8.4", reality["minClientVer"])
+	}
+}
+
+func TestBuildConfig_RealityMinClientVerInvalidFallsBackToDefault(t *testing.T) {
+	kcfg := testKernelCfg
+	kcfg.RealityMinClientVer = "not-a-version"
+	reality := realitySettingsOf(t, kcfg, realityNodeConfig())
+	if reality["minClientVer"] != config.DefaultRealityMinClientVer {
+		t.Errorf("minClientVer = %v, want %v", reality["minClientVer"], config.DefaultRealityMinClientVer)
+	}
+}
+
+func TestBuildConfig_RealityAcceptedByXray(t *testing.T) {
+	for _, minVer := range []string{"", "0.0.0", "1.8.4", "26.3.27"} {
+		kcfg := testKernelCfg
+		kcfg.RealityMinClientVer = minVer
+		data, err := marshalConfig(kcfg, testNodeSpec(realityNodeConfig()), testUsers, kernel.TLSCert{})
+		if err != nil {
+			t.Fatalf("marshalConfig(%q) error = %v", minVer, err)
+		}
+		if _, err := serial.LoadJSONConfig(bytes.NewReader(data)); err != nil {
+			t.Fatalf("Xray rejected REALITY config with reality_min_client_ver %q: %v", minVer, err)
+		}
 	}
 }

@@ -18,13 +18,17 @@ import (
 // M is a shorthand for building JSON-like maps
 type M = map[string]interface{}
 
-func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) (M, error) {
 	var outbounds []M
 	tags := make(map[string]bool)
 
 	// Panel-defined custom outbounds (structured, converted to sing-box native)
-	for _, co := range nc.CustomOutbounds {
-		outbounds = append(outbounds, outboundConfigToSingbox(co))
+	for i, co := range nc.CustomOutbounds {
+		outbound, err := outboundConfigToSingbox(co)
+		if err != nil {
+			return nil, fmt.Errorf("custom_outbounds[%d]: %w", i, err)
+		}
+		outbounds = append(outbounds, outbound)
 		tags[strings.ToLower(co.Tag)] = true
 	}
 
@@ -44,6 +48,7 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	if !tags["block"] {
 		outbounds = append(outbounds, M{"type": "block", "tag": "block"})
 	}
+	outbounds = append(outbounds, buildRelayOutbounds(nc)...)
 
 	cfg := M{
 		"log": M{
@@ -53,13 +58,24 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 		"outbounds": outbounds,
 	}
 
-	inbound := buildInbound(nc, users, tc)
+	inboundNode := nc
+	if nc.IsRelayEntry() && nc.Protocol == "vless" {
+		copyNode := *nc
+		copyNode.Network, _ = model.NormalizeRelayVLESSNetwork(nc.Network)
+		inboundNode = &copyNode
+	}
+	inbound := buildInbound(inboundNode, users, tc)
+	if nc.IsRelayLanding() {
+		inbound = buildRelayLandingInbound(nc, tc)
+	} else {
+		configureRelayUsers(inbound, nc, users)
+	}
 	if inbound != nil {
 		cfg["inbounds"] = []M{inbound}
 	}
 
 	// Merge panel routes and static config routes
-	cfg["route"] = buildRoutes(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute))
+	cfg["route"] = buildRoutes(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute), buildRelayRoutingRules(nc, users)...)
 
 	// Automatically enable rule_set caching (cache_file) when panel routes
 	// reference geoip:/geosite: entries so that the downloaded .srs rule_set
@@ -74,15 +90,24 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	}
 
 	mergeCustomSingbox(cfg, kcfg)
-	return cfg
+	return cfg, nil
 }
 
 // outboundConfigToSingbox converts a structured OutboundConfig (from the panel)
 // into a sing-box outbound object. sing-box uses a flat layout where all
 // protocol-specific fields sit at the top level alongside "type" and "tag".
-func outboundConfigToSingbox(oc model.OutboundConfig) M {
+func outboundConfigToSingbox(oc model.OutboundConfig) (M, error) {
+	// 直连与拦截：面板允许填 xray 的原生名，这里翻译成 sing-box 的名字。
+	outboundType := oc.Protocol
+	switch {
+	case model.IsDirectOutbound(outboundType):
+		outboundType = "direct"
+	case model.IsBlockOutbound(outboundType):
+		outboundType = "block"
+	}
+
 	m := M{
-		"type": oc.Protocol,
+		"type": outboundType,
 		"tag":  oc.Tag,
 	}
 
@@ -134,7 +159,12 @@ func outboundConfigToSingbox(oc model.OutboundConfig) M {
 	if oc.ProxyTag != "" {
 		m["proxy_tag"] = oc.ProxyTag
 	}
-	return m
+	if model.IsDirectOutbound(oc.Protocol) {
+		if err := convertLegacyDirectOptions(m); err != nil {
+			return nil, err
+		}
+	}
+	return m, nil
 }
 
 func mergeRouteList(a, b []map[string]any) []map[string]any {
@@ -144,7 +174,7 @@ func mergeRouteList(a, b []map[string]any) []map[string]any {
 	return res
 }
 
-func buildRoutes(panelRoutes []model.RouteRule, customRules []model.CustomRouteRule, custom []map[string]any) M {
+func buildRoutes(panelRoutes []model.RouteRule, customRules []model.CustomRouteRule, custom []map[string]any, relayRules ...M) M {
 	var rules []M
 
 	// Structured custom routes now take the highest priority for panel-managed overrides.
@@ -185,6 +215,8 @@ func buildRoutes(panelRoutes []model.RouteRule, customRules []model.CustomRouteR
 		},
 	)
 
+	// 中转选路优先于面板路由组，显式自定义规则保持原有优先级。
+	rules = append(rules, relayRules...)
 	for _, pr := range panelRoutes {
 		rules = append(rules, compilePanelRouteRule(pr)...)
 	}
@@ -430,9 +462,13 @@ func mergeCustomSingboxRoute(cfg M, customRoute map[string]any) {
 }
 
 func buildInbound(nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+	listenIP := nc.ListenIP
+	if listenIP == "" {
+		listenIP = "::"
+	}
 	base := M{
 		"tag":         nc.Protocol + "-in",
-		"listen":      "::",
+		"listen":      listenIP,
 		"listen_port": nc.ServerPort,
 	}
 
@@ -498,6 +534,8 @@ var ss2022Methods = map[string]ss2022Config{
 func buildShadowsocks(base M, nc *model.NodeSpec, users []model.UserSpec) M {
 	base["type"] = "shadowsocks"
 	base["method"] = nc.Cipher
+	// 空用户表重启后仍使用多用户认证，不能退回仅校验服务器密钥。
+	base["multi_user"] = true
 
 	ss2022, isSS2022 := ss2022Methods[nc.Cipher]
 	if isSS2022 {
@@ -763,6 +801,7 @@ func buildNaive(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TL
 
 func buildSocks(base M, users []model.UserSpec) M {
 	base["type"] = "socks"
+	base["require_auth"] = true
 
 	userList := make([]M, 0, len(users))
 	for _, u := range users {
@@ -777,6 +816,7 @@ func buildSocks(base M, users []model.UserSpec) M {
 
 func buildHTTP(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	base["type"] = "http"
+	base["require_auth"] = true
 
 	userList := make([]M, 0, len(users))
 	for _, u := range users {

@@ -14,7 +14,6 @@ import (
 type PanelControlPlane struct {
 	cfg    config.PanelConfig
 	wsCfg  config.WSConfig
-	kcfg   config.KernelConfig
 	client *panel.Client
 }
 
@@ -22,11 +21,10 @@ type panelPushClient struct {
 	inner *panel.WSClient
 }
 
-func NewPanelControlPlane(panelCfg config.PanelConfig, wsCfg config.WSConfig, kcfg config.KernelConfig) *PanelControlPlane {
+func NewPanelControlPlane(panelCfg config.PanelConfig, wsCfg config.WSConfig) *PanelControlPlane {
 	return &PanelControlPlane{
 		cfg:    panelCfg,
 		wsCfg:  wsCfg,
-		kcfg:   kcfg,
 		client: panel.NewClient(panelCfg),
 	}
 }
@@ -49,6 +47,13 @@ func (p *PanelControlPlane) Initial(ctx context.Context, metricsFn func() map[st
 	}
 
 	nlog.Core().Info("websocket disabled, using REST API")
+	configETag, userETag := p.client.ETags()
+	committed := false
+	defer func() {
+		if !committed {
+			p.client.RestoreETags(configETag, userETag)
+		}
+	}()
 	configSnapshot, err := p.client.GetConfig()
 	if err != nil {
 		return Bootstrap{}, fmt.Errorf("initial config fetch: %w", err)
@@ -60,15 +65,22 @@ func (p *PanelControlPlane) Initial(ctx context.Context, metricsFn func() map[st
 	if err != nil {
 		return Bootstrap{}, fmt.Errorf("initial user fetch: %w", err)
 	}
-	bootstrap.Config, err = model.NodeSpecFromPanelValidated(configSnapshot, p.kcfg)
-	if err != nil {
-		return Bootstrap{}, fmt.Errorf("initial config normalize: %w", err)
-	}
+	// 配置校验由节点服务负责；无效快照也必须送达，才能停止旧内核并等待修正。
+	bootstrap.Config = model.NodeSpecFromPanel(configSnapshot)
 	bootstrap.Users = model.UserSpecsFromPanel(users)
+	committed = true
 	return bootstrap, nil
 }
 
 func (p *PanelControlPlane) Poll(ctx context.Context) (Snapshot, error) {
+	configETag, userETag := p.client.ETags()
+	committed := false
+	defer func() {
+		if !committed {
+			p.client.RestoreETags(configETag, userETag)
+		}
+	}()
+
 	configSnapshot, err := p.client.GetConfig()
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("poll config: %w", err)
@@ -82,11 +94,12 @@ func (p *PanelControlPlane) Poll(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, ctx.Err()
 	default:
 	}
-	nodeSpec, err := model.NodeSpecFromPanelValidated(configSnapshot, p.kcfg)
-	if err != nil {
-		return Snapshot{}, fmt.Errorf("poll config normalize: %w", err)
-	}
-	return Snapshot{Config: nodeSpec, Users: model.UserSpecsFromPanel(users)}, nil
+	committed = true
+	return Snapshot{Config: model.NodeSpecFromPanel(configSnapshot), Users: model.UserSpecsFromPanel(users)}, nil
+}
+
+func (p *PanelControlPlane) ResetPollingState() {
+	p.client.ResetETags()
 }
 
 func (p *PanelControlPlane) Discover(ctx context.Context, metricsFn func() map[string]interface{}, events chan<- Event, statuses chan<- StatusChange) (PushClient, error) {
@@ -106,7 +119,7 @@ func (p *PanelControlPlane) Discover(ctx context.Context, metricsFn func() map[s
 }
 
 func (p *PanelControlPlane) Report(payload ReportPayload) error {
-	return p.client.Report(payload.Traffic, payload.Alive, payload.Online, payload.CPU, payload.Mem, payload.Swap, payload.Disk, payload.Metrics)
+	return p.client.Report(payload.ReportID, payload.Traffic, payload.RelayTraffic, payload.RelayUserTraffic, payload.Alive, payload.Online, payload.CPU, payload.Mem, payload.Swap, payload.Disk, payload.Metrics)
 }
 
 func (p *PanelControlPlane) ReportDevices(push PushClient, devices map[int][]string) {
@@ -133,11 +146,7 @@ func (p *PanelControlPlane) newPushClient(metricsFn func() map[string]interface{
 		p.cfg.NodeID,
 		cfg,
 		func(event panel.WSEvent) {
-			translated, err := TranslateWSEvent(event, p.kcfg)
-			if err != nil {
-				nlog.Core().Warn("invalid ws event config, dropping event", "type", event.Type, "error", err)
-				return
-			}
+			translated := TranslateWSEvent(event)
 			select {
 			case events <- translated:
 			default:
@@ -159,14 +168,11 @@ func (p *PanelControlPlane) newPushClient(metricsFn func() map[string]interface{
 	return &panelPushClient{inner: inner}
 }
 
-func TranslateWSEvent(event panel.WSEvent, kcfg config.KernelConfig) (Event, error) {
+// TranslateWSEvent 保留待应用快照，由目标节点按自身内核校验并报告失败。
+func TranslateWSEvent(event panel.WSEvent) Event {
 	translated := Event{Type: EventType(event.Type), DeltaAction: event.DeltaAction, DeviceUsers: event.DeviceUsers}
 	if event.Config != nil {
-		var err error
-		translated.Config, err = model.NodeSpecFromPanelValidated(event.Config, kcfg)
-		if err != nil {
-			return Event{}, fmt.Errorf("translate node config: %w", err)
-		}
+		translated.Config = model.NodeSpecFromPanel(event.Config)
 	}
 	if event.Users != nil {
 		translated.Users = model.UserSpecsFromPanel(event.Users)
@@ -174,7 +180,7 @@ func TranslateWSEvent(event panel.WSEvent, kcfg config.KernelConfig) (Event, err
 	if event.DeltaUsers != nil {
 		translated.DeltaUsers = model.UserSpecsFromPanel(event.DeltaUsers)
 	}
-	return translated, nil
+	return translated
 }
 
 func (p *panelPushClient) Run(ctx context.Context) { p.inner.Run(ctx) }

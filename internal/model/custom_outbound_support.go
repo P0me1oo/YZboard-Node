@@ -11,6 +11,12 @@ func OutboundSupportMatrix() map[string]KernelOutboundSupport {
 				"socks",
 				"http",
 				"wireguard",
+				// 直连与拦截：两个内核的原生名不同，两种写法都收，由各自的
+				// 配置构建阶段翻译成内核名（xray 为 freedom / blackhole）。
+				"freedom",
+				"direct",
+				"blackhole",
+				"block",
 			},
 			Features: []string{
 				"tag",
@@ -33,6 +39,10 @@ func OutboundSupportMatrix() map[string]KernelOutboundSupport {
 				"anytls",
 				"naive",
 				"mieru",
+				"freedom",
+				"direct",
+				"blackhole",
+				"block",
 			},
 			Features: []string{
 				"tag",

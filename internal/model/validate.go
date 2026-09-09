@@ -39,6 +39,9 @@ func ValidateNodeSpec(n *NodeSpec, kcfg config.KernelConfig) error {
 	if err := validateTransportKernel(n.Network, kernelType); err != nil {
 		return err
 	}
+	if err := validateRelay(n, kernelType, availableTags); err != nil {
+		return fmt.Errorf("validate relay: %w", err)
+	}
 	return nil
 }
 
@@ -77,6 +80,11 @@ func normalizeKernelType(value string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported kernel type %q", value)
 	}
+}
+
+// NormalizeKernelType exposes the canonical kernel names to orchestration code.
+func NormalizeKernelType(value string) (string, error) {
+	return normalizeKernelType(value)
 }
 
 func buildAvailableOutboundTags(structured []OutboundConfig, rawTags []string) map[string]struct{} {

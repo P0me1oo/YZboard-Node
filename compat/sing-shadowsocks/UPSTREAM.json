@@ -1,0 +1,95 @@
+{
+  "repository": "https://github.com/SagerNet/sing-shadowsocks",
+  "tag": "v0.2.8",
+  "commit": "e0612494bafdd1429e9632bc52fd278585d28690",
+  "files": [
+    {
+      "path": "none.go",
+      "sha256": "f6d260b54feee2c529a58c1c82596d732e9796afdc84026b726b677259719cfd"
+    },
+    {
+      "path": "Makefile",
+      "sha256": "7bb06130de435e7bcb71c2ce2f56003f7a6fee8e6197573c114ee58c80475385"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "2f02b7486bcfa90d115c71a20437f3906b6fd5bef81c5dc0efd341399e89d0fd"
+    },
+    {
+      "path": "go.sum",
+      "sha256": "88fd646766986f8436062b010481327e0995343ace8aa3761c0440a87dd38999"
+    },
+    {
+      "path": "go.mod",
+      "sha256": "14f7ba3b6780fd160c9cbc8096e67ecd07e25ca3dafd2ffedbfae930f628d7d3"
+    },
+    {
+      "path": "shadowstream/protocol.go",
+      "sha256": "7624e67d4dcbd19efb95e8231ce39749f034b3f1161ebf206f373396b59ac829"
+    },
+    {
+      "path": "shadowsocks.go",
+      "sha256": "66a53a887c26d77f70b64dc0463b2b03713415bc37db647d649dc36f6dfe7755"
+    },
+    {
+      "path": "shadowimpl/fetcher.go",
+      "sha256": "148d73b6f03cd63756286294cf27f1d9d9ea6b80f6fdf67a3d97cdddcd93dada"
+    },
+    {
+      "path": "shadowaead_2022/xor_go119.go",
+      "sha256": "68a311eaa801d9702d6fc517254825bd21e38d99c5531cd4a4be54ed1dc421ff"
+    },
+    {
+      "path": "shadowaead_2022/xor.go",
+      "sha256": "6886e10e9e9400d6c79069256807eee83b4fd498e98c8d8c4453a3b92eb6e967"
+    },
+    {
+      "path": "shadowaead_2022/slidingwindow.go",
+      "sha256": "5b594d3bea9e12cd7071d089531206041f8801b1e0307481c6755b591a8828da"
+    },
+    {
+      "path": "shadowaead_2022/service_test.go",
+      "sha256": "00f3b74250aef465ff32b350692e90989e201ed5fd6ca75ca90fd1cf56b7bdf0"
+    },
+    {
+      "path": "shadowaead_2022/service_multi_test.go",
+      "sha256": "8de8849b8fc50b5490289b6d1cc6b59d3d6b44e778f012aafdca4873ee38cea9"
+    },
+    {
+      "path": "shadowaead_2022/service_multi.go",
+      "sha256": "bcfe41fb547eb6eedc15d53e4de564bc4055c9bfe0419e3d98cbbffb26cbc0b2"
+    },
+    {
+      "path": "shadowaead_2022/service.go",
+      "sha256": "1e8a23112b31e59a0af5e6e68f1c2581464dd5a8db4734dd939744b63dfc35b8"
+    },
+    {
+      "path": "shadowaead_2022/relay.go",
+      "sha256": "858e9a9e8f64ebe57e09a96c794852b33c3da70e35f7dacc17922dc941437d55"
+    },
+    {
+      "path": "shadowaead_2022/protocol.go",
+      "sha256": "d7e7f40a4485ef7fe32508ac261b382162f27cfc7c2150f776192cef53857b3f"
+    },
+    {
+      "path": "README.md",
+      "sha256": "5fe3f0af2fdcf65ee8166ad6f612f996a32ec4a288bfd81f073441e617801dff"
+    },
+    {
+      "path": "shadowaead/service_multi.go",
+      "sha256": "5173c5a663d11395ce9a50c69153a53b47640bddde11bb43906e5714debbf12c"
+    },
+    {
+      "path": "shadowaead/service.go",
+      "sha256": "f6f0a46f04d21c4e62b1e5289140af3766b4cf026b8e73f1f6fed20425972924"
+    },
+    {
+      "path": "shadowaead/protocol.go",
+      "sha256": "c177711b439ab33416651e8e039ff21affd6954d27d2e0a6cd3726936201cfc8"
+    },
+    {
+      "path": "shadowaead/aead.go",
+      "sha256": "d7a37769c28cb0ef4d03ee104f8d6e834af56e5dc3ee573ce5f694b9739ae082"
+    }
+  ]
+}

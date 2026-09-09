@@ -220,11 +220,10 @@ func (d *LimitDispatcher) GetConnectionState() (aliveIPs map[int]map[string]bool
 	d.mu.RLock()
 	emailToUID := d.emailToUID
 	limitedIPs := d.limitedIPs
-	d.mu.RUnlock()
 
 	aliveIPs = make(map[int]map[string]bool)
 
-	// Collect IPs from limited users (under RLock snapshot).
+	// 持有读锁直到嵌套 map 复制完成，连接增删会同时修改外层和内层 map。
 	for email, ipsMap := range limitedIPs {
 		uid := emailToUID[email]
 		if uid == 0 {
@@ -238,6 +237,7 @@ func (d *LimitDispatcher) GetConnectionState() (aliveIPs map[int]map[string]bool
 			aliveIPs[uid] = ipSet
 		}
 	}
+	d.mu.RUnlock()
 
 	// Collect IPs from unlimited users (lock-free).
 	d.unlimitedIPs.Range(func(key, value interface{}) bool {

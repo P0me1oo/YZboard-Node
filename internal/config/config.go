@@ -19,14 +19,15 @@ import (
 )
 
 type Config struct {
-	InstanceID string `yaml:"-"`
-	Panel   PanelConfig   `yaml:"panel"`
-	Node    NodeConfig    `yaml:"node"`
-	Kernel  KernelConfig  `yaml:"kernel"`
-	Cert    CertConfig    `yaml:"cert"`
-	Log     LogConfig     `yaml:"log"`
-	Runtime RuntimeConfig `yaml:"runtime"`
-	WS      WSConfig      `yaml:"ws"`
+	InstanceID string         `yaml:"-"`
+	Panel      PanelConfig    `yaml:"panel"`
+	Node       NodeConfig     `yaml:"node"`
+	Kernel     KernelConfig   `yaml:"kernel"`
+	Cert       CertConfig     `yaml:"cert"`
+	Log        LogConfig      `yaml:"log"`
+	Runtime    RuntimeConfig  `yaml:"runtime"`
+	WS         WSConfig       `yaml:"ws"`
+	TimeSync   TimeSyncConfig `yaml:"time_sync"`
 	// Standalone enables a local-only node that never contacts the panel.
 	Standalone *StandaloneConfig `yaml:"standalone,omitempty"`
 	// HealthPort enables a lightweight HTTP health-check endpoint on the
@@ -34,7 +35,8 @@ type Config struct {
 	HealthPort int `yaml:"health_port"`
 	// Nodes enables multi-node mode. When set, Panel.NodeID is ignored and
 	// one service instance is started per entry. All entries share the same
-	// panel URL/token, kernel type, log settings and runtime tuning.
+	// panel URL/token, log settings and runtime tuning; kernel type remains
+	// process configuration for static multi-node mode.
 	Nodes []NodeEntry `yaml:"nodes,omitempty"`
 
 	// Machine enables machine mode: a single process manages all nodes
@@ -45,7 +47,8 @@ type Config struct {
 }
 
 // MachineConfig identifies this process as a panel-managed machine that
-// dynamically discovers and runs all nodes bound to it.
+// dynamically discovers and runs all nodes bound to it. Each discovered node
+// may select its own kernel; Kernel.Type is only the fallback for old panels.
 type MachineConfig struct {
 	MachineID int    `yaml:"machine_id"`
 	Token     string `yaml:"token"`
@@ -90,6 +93,133 @@ type RuntimeConfig struct {
 	// Lower values (e.g. 50) trigger GC more often → lower memory, slightly higher CPU.
 	// 0 means "use the default (100)".
 	GoGCPercent int `yaml:"gogc"`
+}
+
+const (
+	DefaultTimeSyncInterval       = 600
+	DefaultTimeSyncTimeout        = 3
+	DefaultTimeSyncWarnOffset     = 5
+	DefaultTimeSyncErrorOffset    = 15
+	DefaultTimeSyncCriticalOffset = 25
+)
+
+var DefaultTimeSyncServers = []string{
+	"time.cloudflare.com",
+	"time.google.com",
+	"pool.ntp.org",
+}
+
+// TimeSyncConfig 控制进程内协议时钟校准，不修改服务器系统时间。
+type TimeSyncConfig struct {
+	Enabled        *bool    `yaml:"enabled,omitempty"`
+	Servers        []string `yaml:"servers,omitempty"`
+	Interval       int      `yaml:"interval,omitempty"`
+	Timeout        int      `yaml:"timeout,omitempty"`
+	WarnOffset     int      `yaml:"warn_offset,omitempty"`
+	ErrorOffset    int      `yaml:"error_offset,omitempty"`
+	CriticalOffset int      `yaml:"critical_offset,omitempty"`
+}
+
+func (c TimeSyncConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+func (c TimeSyncConfig) Equal(other TimeSyncConfig) bool {
+	if c.IsEnabled() != other.IsEnabled() ||
+		c.Interval != other.Interval ||
+		c.Timeout != other.Timeout ||
+		c.WarnOffset != other.WarnOffset ||
+		c.ErrorOffset != other.ErrorOffset ||
+		c.CriticalOffset != other.CriticalOffset ||
+		len(c.Servers) != len(other.Servers) {
+		return false
+	}
+	for i := range c.Servers {
+		if strings.TrimSpace(c.Servers[i]) != strings.TrimSpace(other.Servers[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *TimeSyncConfig) inheritFrom(parent TimeSyncConfig) {
+	if c.Enabled == nil && parent.Enabled != nil {
+		enabled := *parent.Enabled
+		c.Enabled = &enabled
+	}
+	if len(c.Servers) == 0 {
+		c.Servers = append([]string(nil), parent.Servers...)
+	}
+	if c.Interval == 0 {
+		c.Interval = parent.Interval
+	}
+	if c.Timeout == 0 {
+		c.Timeout = parent.Timeout
+	}
+	if c.WarnOffset == 0 {
+		c.WarnOffset = parent.WarnOffset
+	}
+	if c.ErrorOffset == 0 {
+		c.ErrorOffset = parent.ErrorOffset
+	}
+	if c.CriticalOffset == 0 {
+		c.CriticalOffset = parent.CriticalOffset
+	}
+}
+
+func (c *TimeSyncConfig) setDefaults() {
+	if c.Enabled == nil {
+		enabled := true
+		c.Enabled = &enabled
+	}
+	if len(c.Servers) == 0 {
+		c.Servers = append([]string(nil), DefaultTimeSyncServers...)
+	}
+	if c.Interval == 0 {
+		c.Interval = DefaultTimeSyncInterval
+	}
+	if c.Timeout == 0 {
+		c.Timeout = DefaultTimeSyncTimeout
+	}
+	if c.WarnOffset == 0 {
+		c.WarnOffset = DefaultTimeSyncWarnOffset
+	}
+	if c.ErrorOffset == 0 {
+		c.ErrorOffset = DefaultTimeSyncErrorOffset
+	}
+	if c.CriticalOffset == 0 {
+		c.CriticalOffset = DefaultTimeSyncCriticalOffset
+	}
+}
+
+// ResolveTimeSync 合并实例与顶层配置并补齐默认值，不依赖面板凭据校验。
+func ResolveTimeSync(instance, parent TimeSyncConfig) TimeSyncConfig {
+	instance.inheritFrom(parent)
+	instance.setDefaults()
+	return instance
+}
+
+func ValidateTimeSync(cfg TimeSyncConfig) error {
+	if len(cfg.Servers) == 0 {
+		return fmt.Errorf("time_sync.servers must not be empty")
+	}
+	for i, server := range cfg.Servers {
+		if strings.TrimSpace(server) == "" {
+			return fmt.Errorf("time_sync.servers[%d] must not be empty", i)
+		}
+	}
+	if cfg.Interval <= 0 {
+		return fmt.Errorf("time_sync.interval must be positive")
+	}
+	if cfg.Timeout <= 0 {
+		return fmt.Errorf("time_sync.timeout must be positive")
+	}
+	if cfg.WarnOffset <= 0 ||
+		cfg.ErrorOffset <= cfg.WarnOffset ||
+		cfg.CriticalOffset <= cfg.ErrorOffset {
+		return fmt.Errorf("time_sync offsets must satisfy 0 < warn_offset < error_offset < critical_offset")
+	}
+	return nil
 }
 
 type PanelConfig struct {
@@ -142,6 +272,44 @@ type KernelConfig struct {
 	// customization of dns, outbounds, endpoints, route, experimental, etc.
 	// Compatible with V2bX OriginalPath format.
 	CustomConfig string `yaml:"custom_config"`
+
+	// RealityMinClientVer sets realitySettings.minClientVer on Xray REALITY
+	// inbounds. Format: three decimal segments "x.y.z", each in 0-255.
+	// Empty falls back to DefaultRealityMinClientVer, which keeps every client
+	// version accepted — xray-core applies its own higher floor when the field
+	// is missing from the generated config.
+	// Only used by the xray kernel; sing-box REALITY has no equivalent option.
+	RealityMinClientVer string `yaml:"reality_min_client_ver"`
+}
+
+// DefaultRealityMinClientVer is the minClientVer written to Xray REALITY
+// inbounds when kernel.reality_min_client_ver is not configured.
+const DefaultRealityMinClientVer = "0.0.0"
+
+// ValidateRealityMinClientVer checks the version form xray-core accepts for
+// realitySettings.minClientVer: exactly three decimal segments, each 0-255.
+func ValidateRealityMinClientVer(v string) error {
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return fmt.Errorf("must be three numeric segments like %s, got %q", DefaultRealityMinClientVer, v)
+	}
+	for _, part := range parts {
+		if _, err := strconv.ParseUint(part, 10, 8); err != nil {
+			return fmt.Errorf("segment %q must be a number in 0-255", part)
+		}
+	}
+	return nil
+}
+
+// RealityMinClientVersion returns the effective minClientVer for Xray REALITY
+// inbounds. Load rejects malformed values up front; the fallback here also
+// covers configs built in code that never pass through Load.
+func (k KernelConfig) RealityMinClientVersion() string {
+	v := strings.TrimSpace(k.RealityMinClientVer)
+	if v == "" || ValidateRealityMinClientVer(v) != nil {
+		return DefaultRealityMinClientVer
+	}
+	return v
 }
 
 type CertConfig struct {
@@ -494,6 +662,9 @@ func (c *Config) inheritFrom(parent *Config) {
 	if c.Runtime.GoMemLimit == "" {
 		c.Runtime.GoMemLimit = parent.Runtime.GoMemLimit
 	}
+	// 时间校准由进程共享，但各实例仍先按顶层默认配置完成继承，
+	// 随后再由启动布局校验保证最终配置一致。
+	c.TimeSync.inheritFrom(parent.TimeSync)
 	// Kernel (NOT config_dir — each instance needs unique dir)
 	if c.Kernel.Type == "" {
 		c.Kernel.Type = parent.Kernel.Type
@@ -506,6 +677,9 @@ func (c *Config) inheritFrom(parent *Config) {
 	}
 	if c.Kernel.CustomConfig == "" {
 		c.Kernel.CustomConfig = parent.Kernel.CustomConfig
+	}
+	if c.Kernel.RealityMinClientVer == "" {
+		c.Kernel.RealityMinClientVer = parent.Kernel.RealityMinClientVer
 	}
 	if len(c.Kernel.CustomOutbound) == 0 {
 		c.Kernel.CustomOutbound = parent.Kernel.CustomOutbound
@@ -555,7 +729,7 @@ func (c *Config) inheritFrom(parent *Config) {
 
 func (c *Config) setDefaultsFrom(baseDir string) {
 	if c.Kernel.Type == "" {
-		c.Kernel.Type = "singbox"
+		c.Kernel.Type = "xray"
 	}
 	if c.Kernel.ConfigDir == "" {
 		c.Kernel.ConfigDir = baseDir
@@ -565,6 +739,9 @@ func (c *Config) setDefaultsFrom(baseDir string) {
 	}
 	if c.Kernel.LogLevel == "" {
 		c.Kernel.LogLevel = "warn"
+	}
+	if strings.TrimSpace(c.Kernel.RealityMinClientVer) == "" {
+		c.Kernel.RealityMinClientVer = DefaultRealityMinClientVer
 	}
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
@@ -601,6 +778,7 @@ func (c *Config) setDefaultsFrom(baseDir string) {
 	if c.Node.DeviceReportInterval == 0 {
 		c.Node.DeviceReportInterval = 30
 	}
+	c.TimeSync.setDefaults()
 }
 
 func (c *Config) IsMachineMode() bool {
@@ -724,6 +902,11 @@ func (c *Config) validate() error {
 	default:
 		return fmt.Errorf("kernel.type must be 'singbox' or 'xray', got '%s'", c.Kernel.Type)
 	}
+	if v := strings.TrimSpace(c.Kernel.RealityMinClientVer); v != "" {
+		if err := ValidateRealityMinClientVer(v); err != nil {
+			return fmt.Errorf("kernel.reality_min_client_ver: %w", err)
+		}
+	}
 	if c.Cert.AutoTLS && c.Cert.Domain == "" {
 		return fmt.Errorf("cert.domain is required when cert.auto_tls is enabled")
 	}
@@ -732,6 +915,9 @@ func (c *Config) validate() error {
 	}
 	if c.Node.PullInterval < 0 {
 		return fmt.Errorf("node.pull_interval must not be negative")
+	}
+	if err := ValidateTimeSync(c.TimeSync); err != nil {
+		return err
 	}
 	return nil
 }
@@ -862,11 +1048,20 @@ func ValidateStartupLayout(instances []*Config) error {
 	healthPorts := make(map[int]string)
 	configDirs := make(map[string]string)
 	nodeBindings := make(map[string]string)
+	var processTimeSync *TimeSyncConfig
+	var processTimeSyncOwner string
 	for _, instance := range instances {
 		if instance == nil {
 			continue
 		}
 		owner := instance.InstanceID
+		if processTimeSync == nil {
+			cfg := instance.TimeSync
+			processTimeSync = &cfg
+			processTimeSyncOwner = owner
+		} else if !instance.TimeSync.Equal(*processTimeSync) {
+			return fmt.Errorf("time_sync differs between %s and %s; all instances share one process clock", processTimeSyncOwner, owner)
+		}
 		if instance.HealthPort > 0 {
 			if other, ok := healthPorts[instance.HealthPort]; ok {
 				return fmt.Errorf("health_port %d is used by both %s and %s", instance.HealthPort, other, owner)

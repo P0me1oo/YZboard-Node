@@ -86,6 +86,36 @@ func NodeSpecFromPanel(nc *panel.NodeConfig) *NodeSpec {
 		})
 	}
 
+	var relay *RelayConfig
+	if nc.Relay != nil {
+		relay = &RelayConfig{
+			Mode:        nc.Relay.Mode,
+			RouteID:     nc.Relay.RouteID,
+			Protocol:    nc.Relay.Protocol,
+			ListenPort:  nc.Relay.ListenPort,
+			Cipher:      nc.Relay.Cipher,
+			Password:    nc.Relay.Password,
+			EntryNodeID: nc.Relay.EntryNodeID,
+			VLESS:       relayVLESSFromPanel(nc.Relay.VLESS),
+		}
+		if len(nc.Relay.Children) > 0 {
+			relay.Children = make([]RelayChild, 0, len(nc.Relay.Children))
+			for _, child := range nc.Relay.Children {
+				relay.Children = append(relay.Children, RelayChild{
+					NodeID:   child.NodeID,
+					Tag:      child.Tag,
+					RouteID:  child.RouteID,
+					Protocol: child.Protocol,
+					Address:  child.Address,
+					Port:     child.Port,
+					Cipher:   child.Cipher,
+					Password: child.Password,
+					VLESS:    relayVLESSFromPanel(child.VLESS),
+				})
+			}
+		}
+	}
+
 	return &NodeSpec{
 		Protocol:            nc.Protocol,
 		ListenIP:            nc.ListenIP,
@@ -106,7 +136,7 @@ func NodeSpecFromPanel(nc *panel.NodeConfig) *NodeSpec {
 		PluginOpt:           nc.PluginOpt,
 		ServerKey:           nc.ServerKey,
 		TLS:                 nc.TLS,
-		Flow:                nc.Flow,
+		Flow:                normalizeVLESSFlow(nc.Flow),
 		Decryption:          nc.Decryption,
 		TLSSettings:         cloneAnyMap(nc.TLSSettings),
 		Host:                nc.Host,
@@ -122,6 +152,7 @@ func NodeSpecFromPanel(nc *panel.NodeConfig) *NodeSpec {
 		TrafficPattern:      nc.TrafficPattern,
 		Multiplex:           multiplex,
 		AcceptProxyProtocol: nc.AcceptProxyProtocol,
+		Relay:               relay,
 	}
 }
 
@@ -225,6 +256,36 @@ func (n *NodeSpec) ToPanel() *panel.NodeConfig {
 		})
 	}
 
+	var relay *panel.RelayConfig
+	if n.Relay != nil {
+		relay = &panel.RelayConfig{
+			Mode:        n.Relay.Mode,
+			RouteID:     n.Relay.RouteID,
+			Protocol:    n.Relay.Protocol,
+			ListenPort:  n.Relay.ListenPort,
+			Cipher:      n.Relay.Cipher,
+			Password:    n.Relay.Password,
+			EntryNodeID: n.Relay.EntryNodeID,
+			VLESS:       relayVLESSToPanel(n.Relay.VLESS),
+		}
+		if len(n.Relay.Children) > 0 {
+			relay.Children = make([]panel.RelayChild, 0, len(n.Relay.Children))
+			for _, child := range n.Relay.Children {
+				relay.Children = append(relay.Children, panel.RelayChild{
+					NodeID:   child.NodeID,
+					Tag:      child.Tag,
+					RouteID:  child.RouteID,
+					Protocol: child.Protocol,
+					Address:  child.Address,
+					Port:     child.Port,
+					Cipher:   child.Cipher,
+					Password: child.Password,
+					VLESS:    relayVLESSToPanel(child.VLESS),
+				})
+			}
+		}
+	}
+
 	return &panel.NodeConfig{
 		Protocol:            n.Protocol,
 		ListenIP:            n.ListenIP,
@@ -261,6 +322,41 @@ func (n *NodeSpec) ToPanel() *panel.NodeConfig {
 		TrafficPattern:      n.TrafficPattern,
 		Multiplex:           multiplex,
 		AcceptProxyProtocol: n.AcceptProxyProtocol,
+		Relay:               relay,
+	}
+}
+
+func relayVLESSFromPanel(v *panel.RelayVLESSConfig) *RelayVLESSConfig {
+	if v == nil {
+		return nil
+	}
+	return &RelayVLESSConfig{
+		ID:              v.ID,
+		Network:         v.Network,
+		NetworkSettings: cloneAnyMap(v.NetworkSettings),
+		TLS:             v.TLS,
+		Flow:            normalizeVLESSFlow(v.Flow),
+		Encryption:      v.Encryption,
+		TLSSettings:     cloneAnyMap(v.TLSSettings),
+		RealitySettings: cloneAnyMap(v.RealitySettings),
+		TransportAuth:   v.TransportAuth,
+	}
+}
+
+func relayVLESSToPanel(v *RelayVLESSConfig) *panel.RelayVLESSConfig {
+	if v == nil {
+		return nil
+	}
+	return &panel.RelayVLESSConfig{
+		ID:              v.ID,
+		Network:         v.Network,
+		NetworkSettings: cloneAnyMap(v.NetworkSettings),
+		TLS:             v.TLS,
+		Flow:            v.Flow,
+		Encryption:      v.Encryption,
+		TLSSettings:     cloneAnyMap(v.TLSSettings),
+		RealitySettings: cloneAnyMap(v.RealitySettings),
+		TransportAuth:   v.TransportAuth,
 	}
 }
 
