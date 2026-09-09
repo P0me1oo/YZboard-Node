@@ -33,7 +33,7 @@ CLI_SYMLINK_PATH="/usr/bin/xbctl"
 INSTALLER_COPY_PATH="${INSTALL_ROOT}/install.sh"
 CLI_BINARY_SOURCE=""
 DEFAULT_HEALTH_PORT=65530
-DEFAULT_KERNEL="xray"
+DEFAULT_KERNEL="singbox"
 DEFAULT_MODE="node"
 DEFAULT_ACTION="install"
 DEFAULT_RELEASE_VERSION="latest"
@@ -261,7 +261,7 @@ usage() {
 
   OPTIONAL:
     --node-type, -T     Explicit node type for node mode
-    --kernel, -k        xray or singbox (default: xray)
+    --kernel, -k        xray 或 singbox；新建默认 singbox，VLESS 默认 xray，已有实例保留原内核
     --version           Release version or latest (default: latest)
     --binary            Use a local xboard-node binary path instead of downloading
     --xbctl-binary      Use a local xbctl binary path instead of downloading
@@ -385,14 +385,11 @@ parse_args() {
         *) ;;
     esac
 
-    # 默认内核为 xray，但 xray 的入站协议少于 sing-box。未显式指定内核时，
-    # 若节点协议 xray 不支持，则回退到 sing-box，避免装完直接起不来。
-    if [ "$KERNEL_EXPLICIT" -eq 0 ] && [ "$KERNEL_TYPE" = "xray" ] && [ -n "$NODE_TYPE" ]; then
+    # 新建节点默认使用 sing-box，VLESS 仍默认使用 Xray；显式选择优先。
+    if [ "$KERNEL_EXPLICIT" -eq 0 ] && [ -n "$NODE_TYPE" ]; then
         case "$(printf '%s' "$NODE_TYPE" | tr '[:upper:]' '[:lower:]')" in
-            tuic|naive|anytls|mieru|socks|http)
-                log_warn "Node type '${NODE_TYPE}' is not supported by the xray kernel; falling back to singbox."
-                log_warn "Pass --kernel xray explicitly to override this fallback."
-                KERNEL_TYPE="singbox"
+            vless)
+                KERNEL_TYPE="xray"
                 ;;
         esac
     fi
@@ -837,7 +834,6 @@ render_config() {
         config init
         --mode "$MODE"
         --panel-url "$PANEL_URL"
-        --kernel "${KERNEL_TYPE:-xray}"
         --health-port "${HEALTH_PORT:-0}"
         --token "$TOKEN"
         --version "$RELEASE_VERSION"
@@ -846,6 +842,10 @@ render_config() {
         --meta "$TMP_DIR/install-meta.json"
         --install-root "$INSTALL_ROOT"
     )
+    # 不把默认值伪装成显式选择，交给 xbctl 区分新绑定与已有实例。
+    if [ "$KERNEL_EXPLICIT" -eq 1 ]; then
+        init_args+=(--kernel "$KERNEL_TYPE")
+    fi
     if [ -f "$CONFIG_FILE" ]; then
         init_args+=(--config "$CONFIG_FILE")
     fi

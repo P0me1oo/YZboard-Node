@@ -21,6 +21,7 @@ import (
 
 	"github.com/cedar2025/xboard-node/internal/buildinfo"
 	"github.com/cedar2025/xboard-node/internal/config"
+	"github.com/cedar2025/xboard-node/internal/panel"
 	"github.com/cedar2025/xboard-node/internal/timesync"
 	"gopkg.in/yaml.v3"
 )
@@ -1511,6 +1512,7 @@ func runConfigInit(args []string) error {
 		nodeType       string
 		machineID      int
 		kernelType     string
+		kernelExplicit bool
 		healthPort     int
 		gomemlimit     string
 		gogc           int
@@ -1565,6 +1567,7 @@ func runConfigInit(args []string) error {
 		case "--kernel":
 			i++
 			kernelType = args[i]
+			kernelExplicit = true
 		case "--health-port":
 			i++
 			v, err := strconv.Atoi(args[i])
@@ -1605,6 +1608,23 @@ func runConfigInit(args []string) error {
 	}
 	if mode == "machine" && machineID <= 0 {
 		return errors.New("--machine-id is required for machine mode")
+	}
+
+	// 只为新绑定选择默认内核；旧配置的空值仍保留历史 Xray 语义。
+	if !kernelExplicit {
+		kernelType = "singbox"
+		if mode == "node" && strings.EqualFold(strings.TrimSpace(nodeType), "vless") {
+			kernelType = "xray"
+		}
+	} else {
+		switch strings.ToLower(strings.TrimSpace(kernelType)) {
+		case "xray":
+			kernelType = "xray"
+		case "singbox", "sing-box":
+			kernelType = "singbox"
+		default:
+			return fmt.Errorf("kernel must be xray or singbox, got %q", kernelType)
+		}
 	}
 
 	// Build the new instance.
@@ -1663,6 +1683,8 @@ func runConfigInit(args []string) error {
 		if loaded, loadErr := loadWritableRootConfig(configIn); loadErr == nil {
 			root = loaded
 			hasExisting = len(root.Instances) > 0 || root.Config.Panel.URL != "" || root.Config.Kernel.Type != ""
+		} else if !errors.Is(loadErr, os.ErrNotExist) {
+			return loadErr
 		}
 	}
 
@@ -1693,12 +1715,45 @@ func runConfigInit(args []string) error {
 	replaced := false
 	for i, existing := range instances {
 		if existing.InstanceID == instanceID {
+			if !kernelExplicit {
+				inst.Kernel = existing.Kernel
+			}
+			if strings.TrimSpace(nodeType) == "" {
+				inst.Panel.NodeType = existing.Panel.NodeType
+			}
 			instances[i] = inst
 			replaced = true
 			break
 		}
 	}
 	if !replaced {
+		// 单节点安装常常只提供编号；只在新绑定缺少协议和显式内核时查询面板。
+		if mode == "node" && !kernelExplicit && strings.TrimSpace(nodeType) == "" {
+			if token == "" {
+				return errors.New("无法确认新节点的默认内核：请提供 --token、--node-type 或 --kernel")
+			}
+			client := panel.NewClient(config.PanelConfig{URL: panelURL, Token: token, NodeID: nodeID})
+			nodeConfig, fetchErr := client.GetConfig()
+			if fetchErr != nil || nodeConfig == nil {
+				return errors.New("面板未返回可用的节点配置，请检查面板地址、凭据和节点编号，或显式提供 --node-type / --kernel")
+			}
+			inst.Panel.NodeType = strings.ToLower(strings.TrimSpace(nodeConfig.Protocol))
+			if inst.Panel.NodeType == "" {
+				return errors.New("面板未返回节点协议，无法确认默认内核")
+			}
+			switch strings.ToLower(strings.TrimSpace(nodeConfig.KernelType)) {
+			case "xray":
+				inst.Kernel.Type = "xray"
+			case "singbox", "sing-box":
+				inst.Kernel.Type = "singbox"
+			case "":
+				if inst.Panel.NodeType == "vless" {
+					inst.Kernel.Type = "xray"
+				}
+			default:
+				return errors.New("面板返回了不支持的节点内核，请先修正节点配置")
+			}
+		}
 		instances = append(instances, inst)
 	}
 	root.Instances = instances

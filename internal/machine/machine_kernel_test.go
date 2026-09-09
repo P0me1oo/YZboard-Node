@@ -21,12 +21,14 @@ func TestMachineNodeKernelDefaultsToXray(t *testing.T) {
 }
 
 func TestMachineNodeKernelUsesNodeOverride(t *testing.T) {
-	o := &Orchestrator{cfg: &config.Config{Kernel: config.KernelConfig{Type: "xray"}}}
-
-	if got := o.machineNodeKernel(panel.MachineNode{ID: 1, KernelType: "singbox"}); got != "singbox" {
-		t.Fatalf("node kernel = %q, want singbox", got)
-	}
-	if got := o.machineNodeKernel(panel.MachineNode{ID: 1, KernelType: "xray"}); got != "xray" {
-		t.Fatalf("node kernel = %q, want xray", got)
+	for _, fallback := range []string{"xray", "singbox"} {
+		o := &Orchestrator{cfg: &config.Config{Kernel: config.KernelConfig{Type: fallback}}}
+		for _, nodeType := range []string{"shadowsocks", "vless"} {
+			for _, kernel := range []string{"xray", "singbox"} {
+				if got := o.machineNodeKernel(panel.MachineNode{ID: 1, Type: nodeType, KernelType: kernel}); got != kernel {
+					t.Fatalf("fallback=%s, protocol=%s: node kernel = %q, want %s", fallback, nodeType, got, kernel)
+				}
+			}
+		}
 	}
 }

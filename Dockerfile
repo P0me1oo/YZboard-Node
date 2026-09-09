@@ -52,7 +52,7 @@ WORKDIR /etc/xboard-node
 #   apiKey   / API_KEY     → server token
 #   nodeID   / NODE_ID     → node ID
 #   nodeType / NODE_TYPE   → node type (optional)
-#   kernel   / KERNEL_TYPE → singbox (default) or xray
+#   kernel   / KERNEL_TYPE → 新建建议显式设置 singbox，VLESS 设置 xray；历史省略值仍为 xray
 #   domain   / DOMAIN      → TLS domain (enables auto_tls)
 #   certFile / CERT_FILE   → TLS cert path
 #   keyFile  / KEY_FILE    → TLS key path

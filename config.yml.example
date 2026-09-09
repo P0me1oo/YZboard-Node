@@ -9,7 +9,8 @@
 
 # ── Multiple instances ──
 # kernel:
-#   type: "xray"      # 安装器默认写入 xray；机器模式下节点可在面板分别选择内核
+#   type: "singbox"   # 新安装默认 singbox，VLESS 默认 xray；机器模式按面板节点分别选择
+#                     # 已有配置省略 type 时仍按 xray 加载，不因升级改变内核
 # log:
 #   level: "info"
 # time_sync:

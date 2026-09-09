@@ -737,6 +737,7 @@ func (c *Config) inheritFrom(parent *Config) {
 func (c *Config) setDefaultsFrom(baseDir string) {
 	c.Firewall.setDefaults(baseDir)
 	if c.Kernel.Type == "" {
+		// 兼容已有配置；新安装的默认值由 xbctl 显式写入。
 		c.Kernel.Type = "xray"
 	}
 	if c.Kernel.ConfigDir == "" {

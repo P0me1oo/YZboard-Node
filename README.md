@@ -2,6 +2,8 @@
 
 Node backend for [YZboard](https://github.com/P0me1oo/YZboard). Supports `sing-box` / `xray-core` dual kernels.
 
+正式版从 `v1.13.1` 起采用 `v主版本.次版本.修订号`，不再添加 fork 后缀；上游基线与固定核心依赖单独记录在 [兼容矩阵](YZ_COMPATIBILITY.md)。历史版本继续用于升级和回滚。
+
 > **Disclaimer**: This project is for educational and learning purposes only.
 
 ## Features
@@ -15,7 +17,7 @@ Node backend for [YZboard](https://github.com/P0me1oo/YZboard). Supports `sing-b
 - HY2 端口跳跃：由 Node 管理 nftables/iptables 转发，支持端口列表、范围及其组合；见 [配置说明](docs/firewall-port-hopping.md)
 - 中转：Xray、sing-box 均可作为 VLESS/Hysteria2 入口或 Shadowsocks/VLESS 落地，两种内核可以混用；VLESS Encryption 仅用于两端都是 Xray 的链路
 - HY2 ECH：`yz.22` 配合面板 `1.12.0` 支持 ECH 前置入口，已验证 sing-box／Mihomo 客户端、中转混淆、密钥轮换和流量累计
-- Machine mode: each panel node can select Xray or sing-box independently; Xray is the default
+- 默认内核：新建使用 sing-box，VLESS 使用 Xray；机器模式按面板节点分别选择，已有配置保持原内核
 - 时间校准：为依赖时间戳的 Shadowsocks 2022 链路提供进程内 NTP 校准
 - sing-box：以官方 `v1.14.0` 为基线，`yz.21` 配套 `P0me1oo/YZ-sing-box v1.14.0-yz.2`，保留用户和路由热更新、Mieru，并修复中转检测发现的 gRPC 与 SS2022 关闭竞争；固定依赖和验证记录见 [兼容矩阵](YZ_COMPATIBILITY.md)
 - 可靠性：`yz.19` 让配置、重载和用户应用失败直接进入停止/失败状态，不自动恢复旧配置；同时保留空用户同步、内核重载和退出流量结算修复，验证范围与 Linux 测试方法见 [修复验证](docs/node-reliability-validation.md)
@@ -27,7 +29,7 @@ Node backend for [YZboard](https://github.com/P0me1oo/YZboard). Supports `sing-b
 
 ```bash
 docker run -d --restart=always --network=host --stop-timeout=150 \
-  -e apiHost=https://panel.com -e apiKey=TOKEN -e nodeID=1 \
+  -e apiHost=https://panel.com -e apiKey=TOKEN -e nodeID=1 -e kernel=singbox \
   ghcr.io/p0me1oo/yzboard-node:latest
 ```
 
@@ -42,12 +44,16 @@ docker run -d --restart=always --network=host --stop-timeout=150 \
 ```bash
 # Node mode
 curl -fsSL https://github.com/P0me1oo/YZboard-Node/releases/latest/download/install.sh | \
-  sudo bash -s -- --mode node --panel https://panel.example.com --token TOKEN --node-id 1 --kernel xray --version latest
+  sudo bash -s -- --mode node --panel https://panel.example.com --token TOKEN --node-id 1 --version latest
 
 # Machine mode
 curl -fsSL https://github.com/P0me1oo/YZboard-Node/releases/latest/download/install.sh | \
-  sudo bash -s -- --mode machine --panel https://panel.example.com --token TOKEN --machine-id 1 --kernel xray --version latest
+  sudo bash -s -- --mode machine --panel https://panel.example.com --token TOKEN --machine-id 1 --version latest
 ```
+
+`v1.13.1` 起，安装器和 `xbctl bind add-node/add-machine` 为新绑定默认使用 sing-box，VLESS 默认使用 Xray。单节点未指定协议时会先读取面板配置，保留面板已选择的内核；旧面板只返回协议时按上述规则选择。查询失败则停止创建配置，也可传入 `--node-type vless` 直接选择 VLESS 默认值。显式 `--kernel xray|singbox` 始终优先，机器模式以面板每个节点的内核选择为准。
+
+已有配置保持原内核；重复安装或绑定时省略 `--kernel` 会保留该实例的内核配置。为兼容历史部署，程序加载没有指定内核的旧配置或环境变量时仍使用 Xray。上面的新建 Docker 示例显式设置 sing-box，VLESS 请改为 `-e kernel=xray`。
 
 ### Upgrade
 
