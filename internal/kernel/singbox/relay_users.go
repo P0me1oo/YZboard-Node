@@ -35,7 +35,11 @@ func (s *SingBox) reloadRelayUsersLocked(users []model.UserSpec, next option.Opt
 		return fmt.Errorf("sing-box router does not support relay user updates")
 	}
 	optionsFor := func(list []model.UserSpec) (option.Options, error) {
-		data, err := json.Marshal(buildConfig(s.cfg, s.nodeConfig, list, s.tls))
+		cfg, err := buildConfig(s.cfg, s.nodeConfig, list, s.tls)
+		if err != nil {
+			return option.Options{}, err
+		}
+		data, err := json.Marshal(cfg)
 		if err != nil {
 			return option.Options{}, err
 		}

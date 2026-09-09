@@ -127,6 +127,6 @@ func BenchmarkSingBoxRelayConfig(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		_ = buildConfig(config.KernelConfig{}, node, users, kernel.TLSCert{})
+		_ = mustBuildConfig(b, config.KernelConfig{}, node, users, kernel.TLSCert{})
 	}
 }

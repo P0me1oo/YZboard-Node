@@ -31,7 +31,7 @@ func TestCustomOutbound_DirectAndBlockAliases(t *testing.T) {
 					Protocol: tc.given,
 				}},
 			}
-			cfg := buildConfig(config.KernelConfig{LogLevel: "warn"}, testNodeSpec(nc), testUsers, kernel.TLSCert{})
+			cfg := mustBuildConfig(t, config.KernelConfig{LogLevel: "warn"}, testNodeSpec(nc), testUsers, kernel.TLSCert{})
 
 			obs, _ := cfg["outbounds"].([]M)
 			var found M
@@ -66,7 +66,7 @@ func TestCustomOutbound_BindAddressPassthrough(t *testing.T) {
 			},
 		}},
 	}
-	cfg := buildConfig(config.KernelConfig{LogLevel: "warn"}, testNodeSpec(nc), testUsers, kernel.TLSCert{})
+	cfg := mustBuildConfig(t, config.KernelConfig{LogLevel: "warn"}, testNodeSpec(nc), testUsers, kernel.TLSCert{})
 
 	obs, _ := cfg["outbounds"].([]M)
 	for _, ob := range obs {
@@ -76,7 +76,7 @@ func TestCustomOutbound_BindAddressPassthrough(t *testing.T) {
 		if ob["type"] != "direct" {
 			t.Fatalf("type = %v, want direct", ob["type"])
 		}
-		if ob["inet6_bind_address"] != "2001:db8::1" && ob["domain_strategy"] != "prefer_ipv6" {
+		if ob["inet6_bind_address"] != "2001:db8::1" || ob["domain_strategy"] != "prefer_ipv6" {
 			t.Fatalf("绑定参数没有透传: %#v", ob)
 		}
 		return

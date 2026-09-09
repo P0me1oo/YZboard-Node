@@ -2,11 +2,42 @@
 
 本文件记录可发布的 Node 构建与内嵌内核之间的固定关系。构建上线时必须使用明确的 Node Release Tag 和固定的 Xray fork commit，不能依赖 `main` 或其他移动分支。
 
+## 直连出站切换兼容（v1.13-yz.24，未发布）
+
+| 项目 | 标识 |
+| --- | --- |
+| 目标 Node 版本 | `v1.13-yz.24`；当前为本地源码修改，尚未创建 Tag、Release 或发布镜像 |
+| 修改基线 | `b5ce51f5dea000545d8a4ea6adde0074a9ee7146` |
+| 修改范围 | Node 的 sing-box 直连出站参数转换、单一源地址约束、错误传递及相关测试 |
+| 主控兼容 | 沿用现有 `custom_outbounds` 与节点内核选择字段，面板无需修改保存格式 |
+| Xray 固定依赖 | `v26.7.11-yz.6` / `b4caa82d6414196565599c19ebc1b53e331349b6`，未修改 |
+| sing-box 固定依赖 | `v1.14.0-yz.2` / `09615a105e219076330d9d2a25ea1e2e733d5427`，未修改 |
+| 旧配置兼容 | 转换 `ForceIPv4`／`ForceIPv6`、`AsIs` 和单一源地址绑定；原始面板配置不被改写，其他原生选项按目标内核校验 |
+| 验证状态 | 本地全量 Go 测试、相关依赖测试和双架构构建通过；数据竞争检测与安装器路径测试受本机环境限制，详见下文；尚未发布或更新服务器 |
+
+2026-09-09 本地验证使用 Go `1.26.4`、`windows/amd64`，完整功能标签为
+`with_quic with_utls with_wireguard with_acme with_clash_api`。
+
+| 验证项 | 结果与范围 |
+| --- | --- |
+| 原问题复现 | 修改前的 sing-box 配置解析以 `unknown field "domainStrategy"` 失败，与服务器诊断结果一致 |
+| 全量 Go 测试 | `go test -mod=readonly -count=1 -p=1 -tags "with_quic with_utls with_wireguard with_acme with_clash_api" ./...` 通过；未启用 `-race` |
+| 出站兼容回归 | 固定内核解析、参数冲突、原始配置不变、SS2022 AES-128／AES-256、域名 TCP／UDP、IPv4／IPv6 实际源地址、错误地址族拒绝、路由预解析、UDP 会话后续目标和 IPv4 映射地址通过 |
+| 生命周期回归 | 首批用户、重复同步与重载、停止恢复、错误配置修正、旧格式与原生绑定互换及流量恰好累计通过 |
+| 依赖回归 | `Makefile` 列出的 AnyTLS、两份 SS2022、Xray singbridge／Hysteria 和 sing-box gRPC 共六个包的普通测试通过；依赖未修改 |
+| 安装器测试 | `tests/install_service_manager_test.sh` 通过；`tests/install_paths_test.sh` 在 Git Bash 默认模式下因符号链接被复制为普通文件而无法通过 `fresh` 场景，启用 `MSYS=winsymlinks:nativestrict` 后明确报 `Operation not permitted`；未修改或弱化测试 |
+| 数据竞争检测 | 已尝试设置 `CGO_ENABLED=1` 运行 `go test -race`，编译阶段报 `C compiler "gcc" not found`，未完成检测 |
+| Linux 构建 | Node 与 xbctl 的 `linux/amd64`、`linux/arm64` 构建通过，使用 `-mod=readonly -trimpath -buildvcs=true`、`CGO_ENABLED=0`，临时版本为 `v1.13-yz.24-dev` |
+| 构建来源检查 | 四个程序的 `vcs.revision` 均为上述修改基线，`vcs.modified=true`；Node 的内核版本、替换模块与校验值保持上表固定依赖；这些是本地未提交修改的验证产物 |
+
+跨内核转发测试仅使用回环监听、内存生成的测试身份和本地 DNS。Xray 测试配置单独放行回环目标，以满足其 freedom 出站的默认私有地址限制。
+正式发布前仍需在具备 C 编译器和原生符号链接的 Linux 环境完成 `make test`；本次没有执行 Linux 程序或更新生产节点。
+
 ## 自定义程序目录（v1.13-yz.23）
 
 | 项目 | 标识 |
 | --- | --- |
-| 当前 Node 版本 | `v1.13-yz.23`；Tag、Release、双架构安装包及镜像已发布并校验 |
+| 当前正式 Node 版本 | `v1.13-yz.23`；Tag、Release、双架构安装包及镜像已发布并校验 |
 | 正式来源 commit | `1944c8eb7982c4f6156d6adff8e8a734cdc1813b` |
 | 本次修改基线 | `1d74d19cbb738e6fcde466361c24a186b8deec60` |
 | 修改范围 | 安装器、xbctl 的程序目录与升级回滚、systemd/OpenRC 服务路径及相关测试 |

@@ -10,7 +10,6 @@ import (
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/auth"
 	singJSON "github.com/sagernet/sing/common/json"
@@ -97,7 +96,10 @@ func (s *SingBox) startLocked(nodeConfig *model.NodeSpec, users []model.UserSpec
 	if err := s.validateRelay(nodeConfig, users); err != nil {
 		return err
 	}
-	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
+	cfgMap, err := buildConfig(s.cfg, nodeConfig, users, tls)
+	if err != nil {
+		return err
+	}
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -106,7 +108,11 @@ func (s *SingBox) startLocked(nodeConfig *model.NodeSpec, users []model.UserSpec
 	nlog.Core().Debug("sing-box config generated", "len", len(data))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	ctx = include.Context(ctx)
+	ctx, err = directOutboundContext(ctx, nodeConfig.CustomOutbounds)
+	if err != nil {
+		cancel()
+		return err
+	}
 	service.MustRegister[ntp.TimeService](ctx, timesync.Default())
 
 	opts, err := singJSON.UnmarshalExtendedContext[option.Options](ctx, data)
@@ -177,7 +183,10 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 		return err
 	}
 
-	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
+	cfgMap, err := buildConfig(s.cfg, nodeConfig, users, tls)
+	if err != nil {
+		return err
+	}
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -188,8 +197,12 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 		return fmt.Errorf("parse options: %w", err)
 	}
 
-	previous := buildConfig(s.cfg, s.nodeConfig, s.users, s.tls)
-	if !onlyRouteRulesChanged(previous, cfgMap) {
+	previous, err := buildConfig(s.cfg, s.nodeConfig, s.users, s.tls)
+	if err != nil {
+		return err
+	}
+	// 原生绑定与旧式单地址绑定可能生成相同字段，但连接时的地址族约束不同。
+	if !onlyRouteRulesChanged(previous, cfgMap) || !reflect.DeepEqual(s.nodeConfig.CustomOutbounds, nodeConfig.CustomOutbounds) {
 		return s.startLocked(nodeConfig, users, tls)
 	}
 
@@ -432,7 +445,10 @@ func (s *SingBox) reloadInboundsLocked(users []model.UserSpec) error {
 	if err := validateRelayUsers(s.nodeConfig, users); err != nil {
 		return err
 	}
-	cfgMap := buildConfig(s.cfg, s.nodeConfig, users, s.tls)
+	cfgMap, err := buildConfig(s.cfg, s.nodeConfig, users, s.tls)
+	if err != nil {
+		return err
+	}
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)

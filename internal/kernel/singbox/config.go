@@ -18,13 +18,17 @@ import (
 // M is a shorthand for building JSON-like maps
 type M = map[string]interface{}
 
-func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) (M, error) {
 	var outbounds []M
 	tags := make(map[string]bool)
 
 	// Panel-defined custom outbounds (structured, converted to sing-box native)
-	for _, co := range nc.CustomOutbounds {
-		outbounds = append(outbounds, outboundConfigToSingbox(co))
+	for i, co := range nc.CustomOutbounds {
+		outbound, err := outboundConfigToSingbox(co)
+		if err != nil {
+			return nil, fmt.Errorf("custom_outbounds[%d]: %w", i, err)
+		}
+		outbounds = append(outbounds, outbound)
 		tags[strings.ToLower(co.Tag)] = true
 	}
 
@@ -86,13 +90,13 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	}
 
 	mergeCustomSingbox(cfg, kcfg)
-	return cfg
+	return cfg, nil
 }
 
 // outboundConfigToSingbox converts a structured OutboundConfig (from the panel)
 // into a sing-box outbound object. sing-box uses a flat layout where all
 // protocol-specific fields sit at the top level alongside "type" and "tag".
-func outboundConfigToSingbox(oc model.OutboundConfig) M {
+func outboundConfigToSingbox(oc model.OutboundConfig) (M, error) {
 	// 直连与拦截：面板允许填 xray 的原生名，这里翻译成 sing-box 的名字。
 	outboundType := oc.Protocol
 	switch {
@@ -155,7 +159,12 @@ func outboundConfigToSingbox(oc model.OutboundConfig) M {
 	if oc.ProxyTag != "" {
 		m["proxy_tag"] = oc.ProxyTag
 	}
-	return m
+	if model.IsDirectOutbound(oc.Protocol) {
+		if err := convertLegacyDirectOptions(m); err != nil {
+			return nil, err
+		}
+	}
+	return m, nil
 }
 
 func mergeRouteList(a, b []map[string]any) []map[string]any {
