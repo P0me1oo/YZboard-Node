@@ -2,11 +2,58 @@
 
 本文件记录可发布的 Node 构建与内嵌内核之间的固定关系。构建上线时必须使用明确的 Node Release Tag 和固定的 Xray fork commit，不能依赖 `main` 或其他移动分支。
 
-## 新建绑定默认内核（v1.13.1，发布准备）
+## 当前正式发布（v1.13.1，2026-09-10）
 
 | 项目 | 标识 |
 | --- | --- |
-| 目标 Node 版本 | `v1.13.1`，标准三段正式版本；替代此前未发布的 `v1.13-yz.25` 计划 |
+| Node 正式版本 | `v1.13.1`；Tag、Release、安装包及双架构镜像已发布并核验 |
+| 正式来源 Tag / commit | `v1.13.1` / `ebc52dfd522c140bb03ac34940b46ad77523c58c`；后续发布记录提交不改变此构建来源 |
+| Node 上游基线 | `cedar2025/xboard-node` 的 `v1.13` / `0a29338e1f102a462363ce3527417029f89bab28` |
+| Release | [v1.13.1](https://github.com/P0me1oo/YZboard-Node/releases/tag/v1.13.1)，最新正式版本；发布时间 `2026-09-09T16:56:00Z`，对应新加坡时间 2026-09-10 |
+| 正式发布 CI | [34378744231](https://github.com/P0me1oo/YZboard-Node/actions/runs/34378744231)，全部通过；来源为本节固定提交 |
+| 正式安装附件 | Node、xbctl 各两个 Linux 架构，安装器、四份构建信息和 SHA256SUMS，共 10 个附件 |
+| 正式镜像 | `ghcr.io/p0me1oo/yzboard-node:v1.13.1`；完整提交标签和 `latest` 已核对指向同一镜像 |
+| Docker manifest | `sha256:6cd65852f0c11a85296660add721f843a6f94d0f7b0ccc81d72e72076638b1eb` |
+| Docker 平台与 OCI 标识 | `linux/amd64`、`linux/arm64`；两架构均为 `revision=ebc52dfd522c140bb03ac34940b46ad77523c58c`、`version=v1.13.1` |
+| Xray 固定依赖 | `v26.7.11-yz.6` / `b4caa82d6414196565599c19ebc1b53e331349b6`；实际 replacement 为 `github.com/P0me1oo/YZ-Xray-core v0.0.0-20260907200713-b4caa82d6414` |
+| sing-box 固定依赖 | `v1.14.0-yz.2` / `09615a105e219076330d9d2a25ea1e2e733d5427`；实际 replacement 为 `github.com/P0me1oo/YZ-sing-box v1.14.0-yz.2` |
+| 配套面板 | [v1.13.3](https://github.com/P0me1oo/YZboard/releases/tag/v1.13.3) / `f88d243b7e7683e183bf0a3d62af1173220b0855`，已正式发布；包含上游同步、默认内核和 64 MiB 插件上传 |
+| 配套面板镜像 | `ghcr.io/p0me1oo/yzboard:1.13.3-f88d243`；manifest `sha256:fe398445e0f793c50585f184e1b6babcb80bd33379297676c7d03612b381330e`；版本别名及 `latest` 一致，包含两个 Linux 架构 |
+| 上一正式 Node（回滚） | [v1.13-yz.24](https://github.com/P0me1oo/YZboard-Node/releases/tag/v1.13-yz.24) / `af69ef598f4f75b5bfa0509b1e1d01a653378d47` |
+| Node 回滚镜像 | `ghcr.io/p0me1oo/yzboard-node:v1.13-yz.24`；manifest `sha256:86c8e0f646ae124fbf44e862bdf3796a5090dd9bb66856826ced8c68662dae24`，两个架构及来源已核对 |
+| 面板回滚镜像 | `ghcr.io/p0me1oo/yzboard:1.13.0-2f29916`；来源 `2f2991633d7f9d841165e68e66aff50af494cce3`；manifest `sha256:376fc1668d9a51531098b4d35c0787fe3d4e8e3a10d9b93ca3e720d1cd71cd20` |
+
+Linux 正式 CI 完成 `make test`：安装器服务、默认内核和路径测试，全量 Go 与六个相关依赖包的数据竞争检测均通过；随后完成双架构构建、构建来源核验及两个架构的镜像版本运行检查。amd64 的 Node、xbctl 已执行版本检查，arm64 Node 镜像经 QEMU 执行版本检查。
+
+10 个 Release 附件已下载，实际 SHA256 逐个匹配 GitHub 附件摘要；`SHA256SUMS` 中的 9 项记录均匹配对应附件。安装器内容与固定提交逐字节一致。四个程序的实际 `go version -m` 输出与构建信息附件一致，均为 Go 1.26.4、对应 Linux 架构、模块版本 `v1.13.1`、`CGO_ENABLED=0`、上述来源和 `vcs.modified=false`。Node 的实际核心 replacement 及模块校验值保持固定；xbctl 不链接核心。
+
+| 正式附件 | SHA256 |
+| --- | --- |
+| `xboard-node-linux-amd64` | `fb41a70ed8b300d16ef7b3e7d6903076ef592e2b0f0e591e88c73256a681c60e` |
+| `xboard-node-linux-arm64` | `7eb314ba70caa8262dd59c87d2e32b6a098408b149b12e3346f016ef29574d07` |
+| `xbctl-linux-amd64` | `eda43f8449738c6f129a04aa1baf98b45e01ba6647b1701ccc7516664ba87dc1` |
+| `xbctl-linux-arm64` | `d2c2009b50217a875b9097a183524ad330748d7feef5af51f3318c341990831f` |
+| `install.sh` | `b884dd685a95ec4890a5335c2f742fa8615ef85968cb825d7d1116f3fb5b7491` |
+| `SHA256SUMS` | `3a4c35e720b6e661261da38e3008c7995d14cb61d8c721fccbddf81b5b79d407` |
+| `xboard-node-linux-amd64.buildinfo.txt` | `f9bf5349e7d6af1411886ef3541ab52e887fd81fc0f0177e6f90e161578ace1c` |
+| `xboard-node-linux-arm64.buildinfo.txt` | `9cda7b4b39f6b51c12f923e1e7c9304c0b0354f8328dea2925228d18746ba4ac` |
+| `xbctl-linux-amd64.buildinfo.txt` | `734aa1da9c9e0251c4d20340e8359f120d62951dc2f942bec8bdd59d7d223f32` |
+| `xbctl-linux-arm64.buildinfo.txt` | `c8e9f5b09d56c892e577f62247fe38ecd2a2204c2dc9818ec2bea2c532952de4` |
+
+通过匿名 GHCR 接口核对版本、完整提交及 `latest` 标签，镜像索引、平台清单和配置的实际 SHA256 全部一致；两个架构的 OCI version 与 revision 均符合本节来源。
+
+| Node 镜像平台 | 平台 manifest |
+| --- | --- |
+| `linux/amd64` | `sha256:c01154c7cea2db68514a2b8c281eb9e2aaf2491ead9c724671d4c82d0f3ff34a` |
+| `linux/arm64` | `sha256:591d67e0a4b9d843e337248af07159c1d4af5c35fb2e9bddb1c690f80c3db8bf` |
+
+服务器更新由用户执行，顺序为 Node `v1.13.1`、面板 `v1.13.3`。常规 Node 升级使用 `sudo xbctl upgrade --version v1.13.1`，再用 `sudo xbctl version` 和 `sudo xbctl service status` 检查；保留上表历史版本作为回滚基线。
+
+## 新建绑定默认内核（v1.13.1，已发布）
+
+| 项目 | 标识 |
+| --- | --- |
+| 本版 Node 版本 | `v1.13.1`，标准三段正式版本；替代此前未发布的 `v1.13-yz.25` 计划，正式产物见顶部记录 |
 | 修改基线 | `af69ef598f4f75b5bfa0509b1e1d01a653378d47` |
 | 配套面板 | `1.13.3`；面板新建节点默认 sing-box，VLESS 默认 Xray，并下发明确的 `kernel_type` |
 | 安装与绑定 | 未指定 `--kernel` 的新绑定默认 `singbox`，VLESS 默认 `xray`；单节点未指定协议时读取面板配置，面板明确选择的内核优先 |
@@ -31,9 +78,11 @@
 | Linux 构建 | Node 与 xbctl 的 `linux/amd64`、`linux/arm64` 四个构建通过，使用 `CGO_ENABLED=0`、`-mod=readonly -trimpath -buildvcs=true`，验证版本为 `v1.13-yz.25-dev` |
 | 构建来源 | 四个程序的 `vcs.revision` 均为本节修改基线，`vcs.modified=true`；Node 实际替换模块仍为上表两份固定核心依赖，属于未提交源码的验证产物 |
 
-以上为 2026-09-09 的开发验证记录，原开发构建名称和摘要不改写为正式版本。正式发布使用提交后的固定 `v1.13.1` Tag，经 Linux 完整测试、双架构构建、安装包校验和镜像版本检查后生成发布记录；服务端核心依赖沿用上表版本。
+以上为 2026-09-09 的开发验证记录，原开发构建名称和摘要不改写为正式版本。正式发布使用提交后的固定 `v1.13.1` Tag，已完成 Linux 完整测试、双架构构建、安装包校验和镜像版本检查，实际结果见顶部正式发布记录；服务端核心依赖沿用上表版本。
 
 从本版起，新正式 Tag、Release 和程序版本使用 `v<主版本>.<次版本>.<修订号>`；上游基线单独记录。历史 `-yz.N` Tag、Release 与镜像保持原样，安装器和 `xbctl upgrade` 继续支持显式下载旧版。发布顺序为 Node `v1.13.1`、面板 `v1.13.3`。
+
+以下各节保留此前的开发和历史发布记录，其中“未发布”“待发布”等状态仅对应当时的验证阶段。当前正式版本及最近回滚基线以顶部 `v1.13.1` 发布记录为准。
 
 ## 直连出站切换兼容（v1.13-yz.24，未发布）
 
@@ -110,7 +159,7 @@
 
 以下记录 `v1.13-yz.23` 的正式发布结果；Node 回滚基线为 `v1.13-yz.22`，面板沿用 `1.12.0`。`yz.22` 的验证保留在历史发布记录中。
 
-## 最近正式发布引用与回滚基线
+## v1.13-yz.23 发布引用与回滚基线（历史记录）
 
 | 项目 | 标识 |
 | --- | --- |
@@ -164,7 +213,7 @@ Node 自身版本保持独立，不伪装成 Xray 版本。Node 延续上游 `v1
 
 正式 `go.mod` 与 `go.sum` 固定两个主内核的远程版本和校验值；AnyTLS 与 SS2022 兼容源码随 Node 提交固定。服务器安装版本由用户执行升级后改变。
 
-## 本版发布验证（2026-09-09）
+## v1.13-yz.23 发布验证（2026-09-09）
 
 Node 的 [发布前 CI](https://github.com/P0me1oo/YZboard-Node/actions/runs/34269113262/attempts/2) 与
 [正式发布 CI](https://github.com/P0me1oo/YZboard-Node/actions/runs/34270886003) 均从
